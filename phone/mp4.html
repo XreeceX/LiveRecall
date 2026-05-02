@@ -1,0 +1,523 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>LiveRecall · Ray-Ban MP4 player</title>
+    <link rel="icon" href="data:," />
+    <!--
+      LiveRecall capture entry point #3 — pre-recorded Ray-Ban MP4 player.
+
+      Why this exists:
+        - Meta Ray-Ban v2's Live AI is region-gated (US/Canada only as of
+          2026-05). Outside those regions the only POV feed we can grab is
+          a video recorded on the glasses ("Hey Meta, record a video") and
+          AirDropped to the laptop.
+        - Rather than loop screenshots of a QuickTime mirror, this page
+          lets the operator load that MP4 directly, scrub to any frame,
+          and fire exactly one /snap per button click. Same HTTP contract
+          as phone/glasses.html's "Snap & ask" button — so the backend
+          cannot tell it apart from a real Ray-Ban snap, and the whole
+          verified Path A pipeline runs unchanged (Vision → Router →
+          Retrievers → Reranker → Answerer, capture_mode="glasses"
+          stamped on the scene).
+
+      What it is NOT:
+        - It does not join a LiveKit room. It never opens the webcam or
+          mic. No streaming, no audio round-trip. One HTTP POST per snap.
+
+      Runtime:
+        - Drag-and-drop or pick an MP4 (any H.264/AAC clip that a browser
+          can decode). File stays local — object URL only, no upload.
+        - Native <video controls> gives scrubbing + frame-by-frame.
+        - One click → captures the currently-displayed frame into a
+          hidden canvas → JPEG/base64 → POST /snap with
+          capture_mode="glasses".
+    -->
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #0a0d18;
+        --panel: #131a2a;
+        --accent: #a78bfa;        /* purple — same as glasses.html to signal POV path */
+        --accent-2: #60a5fa;
+        --warn: #fbbf24;
+        --err: #f87171;
+        --ok: #4ade80;
+        --text: #e5e7eb;
+        --muted: #94a3b8;
+      }
+      * { box-sizing: border-box; }
+      html, body { height: 100%; margin: 0; }
+      body {
+        background:
+          radial-gradient(1200px 600px at 80% -10%, rgba(167, 139, 250, 0.18), transparent 60%),
+          radial-gradient(800px 400px at 0% 100%, rgba(96, 165, 250, 0.12), transparent 60%),
+          var(--bg);
+        color: var(--text);
+        font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+        display: flex;
+        flex-direction: column;
+        padding: env(safe-area-inset-top) 16px env(safe-area-inset-bottom);
+        gap: 12px;
+      }
+      header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding-top: 12px;
+      }
+      h1 { font-size: 20px; margin: 0; letter-spacing: 0.5px; }
+      h1 small { color: var(--muted); font-weight: 400; font-size: 12px; }
+
+      .pill {
+        font-size: 11px;
+        padding: 4px 8px;
+        border-radius: 999px;
+        background: #1f2937;
+        color: var(--muted);
+        text-transform: uppercase;
+        letter-spacing: 0.6px;
+      }
+      .pill.live { background: rgba(74, 222, 128, 0.18); color: var(--ok); }
+      .pill.warn { background: rgba(251, 191, 36, 0.15); color: var(--warn); }
+      .pill.err { background: rgba(248, 113, 113, 0.18); color: var(--err); }
+      .pill.mode-glasses {
+        background: linear-gradient(90deg, rgba(167, 139, 250, 0.25), rgba(96, 165, 250, 0.18));
+        color: #ddd6fe;
+        border: 1px solid rgba(167, 139, 250, 0.45);
+      }
+
+      .panel {
+        background: var(--panel);
+        border: 1px solid #1f2937;
+        border-radius: 14px;
+        padding: 14px;
+      }
+      label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+      input, textarea {
+        width: 100%;
+        background: #0a0d18;
+        color: var(--text);
+        border: 1px solid #1f2937;
+        border-radius: 10px;
+        padding: 10px 12px;
+        font-size: 14px;
+        font-family: inherit;
+      }
+      textarea { resize: vertical; min-height: 52px; }
+      .row { display: flex; gap: 10px; }
+      .row > * { flex: 1; }
+
+      button {
+        appearance: none;
+        border: none;
+        font-weight: 600;
+        font-size: 15px;
+        padding: 14px 18px;
+        border-radius: 12px;
+        cursor: pointer;
+        transition: transform 0.05s ease, opacity 0.15s ease;
+      }
+      button:active { transform: scale(0.98); }
+      button:disabled { opacity: 0.5; cursor: not-allowed; }
+      .btn-primary {
+        background: linear-gradient(90deg, var(--accent), var(--accent-2));
+        color: #0a0d18;
+      }
+      .btn-secondary { background: #1f2937; color: var(--text); }
+
+      /* Player viewport — wider 16:9 framing, matches glasses.html. */
+      .pov-frame {
+        position: relative;
+        width: 100%;
+        aspect-ratio: 16 / 9;
+        border-radius: 16px;
+        overflow: hidden;
+        background: #000;
+        border: 1px solid rgba(167, 139, 250, 0.3);
+        box-shadow: 0 0 0 1px rgba(167, 139, 250, 0.15) inset;
+      }
+      .pov-frame video {
+        width: 100%;
+        height: 100%;
+        object-fit: contain;
+        display: block;
+        background: #000;
+      }
+      .pov-empty {
+        position: absolute; inset: 0;
+        display: flex; align-items: center; justify-content: center;
+        color: var(--muted); text-align: center; padding: 24px;
+        font-size: 14px;
+        pointer-events: none;
+      }
+      .pov-tag {
+        position: absolute;
+        top: 10px;
+        left: 10px;
+        font-size: 10px;
+        letter-spacing: 0.8px;
+        text-transform: uppercase;
+        color: #ddd6fe;
+        background: rgba(10, 13, 24, 0.6);
+        padding: 4px 8px;
+        border-radius: 6px;
+        border: 1px solid rgba(167, 139, 250, 0.35);
+      }
+      .pov-time {
+        position: absolute;
+        bottom: 10px;
+        right: 10px;
+        font-family: ui-monospace, "JetBrains Mono", Menlo, monospace;
+        font-size: 11px;
+        color: #ddd6fe;
+        background: rgba(10, 13, 24, 0.6);
+        padding: 4px 8px;
+        border-radius: 6px;
+      }
+
+      /* Drag-and-drop hover state for the whole panel when the user drags
+         an MP4 in from Finder. Purely visual. */
+      .drop-zone.drag-over {
+        outline: 2px dashed var(--accent);
+        outline-offset: -8px;
+      }
+
+      #log {
+        font-family: ui-monospace, "JetBrains Mono", Menlo, monospace;
+        font-size: 12px;
+        line-height: 1.5;
+        background: #060914;
+        border-radius: 10px;
+        padding: 10px;
+        height: 16vh;
+        overflow-y: auto;
+        white-space: pre-wrap;
+      }
+      .log-line { color: var(--muted); }
+      .log-line.ok { color: var(--ok); }
+      .log-line.warn { color: var(--warn); }
+      .log-line.err { color: var(--err); }
+
+      .result {
+        display: none;
+        margin-top: 10px;
+        padding: 10px;
+        background: #060914;
+        border-radius: 10px;
+        font-size: 12px;
+        line-height: 1.6;
+      }
+      .result.show { display: block; }
+      .result .chip {
+        display: inline-block;
+        background: rgba(167, 139, 250, 0.15);
+        border: 1px solid rgba(167, 139, 250, 0.3);
+        color: #ddd6fe;
+        padding: 2px 8px;
+        border-radius: 6px;
+        margin: 2px 4px 2px 0;
+        font-size: 11px;
+      }
+      .result .chip.vis { background: rgba(96, 165, 250, 0.12); color: #bfdbfe; border-color: rgba(96, 165, 250, 0.3); }
+      .result img {
+        max-width: 180px;
+        border-radius: 8px;
+        margin-top: 8px;
+      }
+      .result .section-label {
+        color: var(--muted);
+        font-size: 10px;
+        letter-spacing: 0.5px;
+        text-transform: uppercase;
+        margin-top: 8px;
+      }
+
+      .footnote {
+        font-size: 11px;
+        color: var(--muted);
+        line-height: 1.55;
+      }
+      .footnote a { color: var(--accent); }
+      .footnote code { color: #ddd6fe; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>LiveRecall <small>· Ray-Ban MP4 player</small></h1>
+      <div style="display: flex; gap: 6px; align-items: center;">
+        <span
+          class="pill mode-glasses"
+          title="Snaps from this page fire /snap with capture_mode=glasses — same Path A pipeline as the live glasses bridge."
+        >🕶️ Glasses · MP4</span>
+        <span id="status" class="pill">no video loaded</span>
+      </div>
+    </header>
+
+    <div class="panel">
+      <label>Backend URL</label>
+      <input id="backend" placeholder="http://localhost:8001" />
+      <div style="height: 8px"></div>
+      <div class="row">
+        <div>
+          <label>Session ID</label>
+          <input id="session" placeholder="demo" />
+        </div>
+        <div>
+          <label>Capture mode</label>
+          <input id="mode" value="glasses" readonly style="opacity: 0.7; cursor: not-allowed" />
+        </div>
+      </div>
+    </div>
+
+    <div class="panel drop-zone" id="dropzone">
+      <label>MP4 file</label>
+      <div class="row">
+        <input type="file" id="file" accept="video/mp4,video/quicktime,video/*" style="padding: 6px 8px" />
+      </div>
+      <div style="height: 10px"></div>
+      <div class="pov-frame">
+        <video id="player" playsinline controls></video>
+        <span class="pov-tag">POV · recorded</span>
+        <span class="pov-time" id="timestamp">—</span>
+        <div class="pov-empty" id="empty">
+          Drop a Ray-Ban MP4 here (or use the picker above).<br />
+          Any H.264/AAC clip your browser can decode works.
+        </div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <label>Question to fire on snap</label>
+      <textarea id="question"
+        placeholder="Is it safe to give this dose now? When did they last receive it?"
+      >Is it safe to give this dose now? When did they last receive it?</textarea>
+      <div style="height: 10px"></div>
+      <div class="row">
+        <button id="snap" class="btn-primary">📸 Snap &amp; ask (at current frame)</button>
+      </div>
+      <div class="result" id="result"></div>
+    </div>
+
+    <div class="panel">
+      <label>Log</label>
+      <div id="log"></div>
+    </div>
+
+    <div class="panel footnote">
+      <strong>Flow.</strong> Scrub the video to the frame you want (pause it
+      for a clean capture), then click <strong>Snap &amp; ask</strong>. The
+      currently-displayed frame is downscaled to ≤640 px long edge,
+      JPEG-encoded, and POSTed to <code>/snap</code> as
+      <code>capture_mode="glasses"</code>. Same contract as
+      <a href="./glasses.html">phone/glasses.html</a>'s Snap &amp; ask
+      button — the backend runs the verified Path A pipeline on it. Check
+      <code>/trace/:question_id</code> or the dashboard for the grounded
+      answer once the question fires.
+    </div>
+
+    <!-- Hidden canvas — off-DOM scratch space for the video→JPEG step. -->
+    <canvas id="snap-canvas" style="display: none"></canvas>
+
+    <script>
+      // Capture-mode is fixed for this page: every snap advertises itself
+      // as "glasses" so Vision picks the first-person POV prompt and the
+      // dashboard lights up the GLASSES tag. Matches DECISIONS.md (g).
+      const CAPTURE_MODE = "glasses";
+      const MAX_EDGE_PX = 640;      // matches scripts/bridge_rayban_snap.py
+      const JPEG_QUALITY = 0.72;    // ditto
+
+      const $ = (id) => document.getElementById(id);
+
+      // Tiny log helper — same shape as glasses.html so the pages feel
+      // uniform to the operator. Newest line on top.
+      const log = (msg, cls = "") => {
+        const div = document.createElement("div");
+        div.className = "log-line " + cls;
+        const ts = new Date().toLocaleTimeString();
+        div.textContent = `[${ts}] ${msg}`;
+        $("log").prepend(div);
+      };
+
+      const setStatus = (text, cls = "") => {
+        const el = $("status");
+        el.textContent = text;
+        el.className = "pill " + cls;
+      };
+
+      // --- Persisted inputs -------------------------------------------------
+      // Same localStorage keys the other phone pages use where sensible.
+      const params = new URLSearchParams(location.search);
+      $("backend").value =
+        params.get("backend") ||
+        localStorage.getItem("backend") ||
+        "http://localhost:8001";
+      $("session").value =
+        params.get("session") ||
+        localStorage.getItem("session") ||
+        "demo";
+
+      for (const id of ["backend", "session"]) {
+        $(id).addEventListener("change", () => {
+          localStorage.setItem(id, $(id).value);
+        });
+      }
+
+      // --- File loading -----------------------------------------------------
+      const player = $("player");
+      const empty = $("empty");
+
+      function loadFile(file) {
+        if (!file) return;
+        if (!file.type.startsWith("video/")) {
+          log(`not a video: ${file.name} (${file.type})`, "err");
+          return;
+        }
+        const url = URL.createObjectURL(file);
+        player.src = url;
+        player.load();
+        empty.style.display = "none";
+        setStatus(`loaded · ${file.name}`, "live");
+        log(`loaded ${file.name} (${Math.round(file.size / 1024)} KB)`, "ok");
+      }
+
+      $("file").addEventListener("change", (e) => {
+        loadFile(e.target.files && e.target.files[0]);
+      });
+
+      // Drag-and-drop anywhere on the drop panel.
+      const dropzone = $("dropzone");
+      ["dragenter", "dragover"].forEach((ev) =>
+        dropzone.addEventListener(ev, (e) => {
+          e.preventDefault();
+          dropzone.classList.add("drag-over");
+        })
+      );
+      ["dragleave", "drop"].forEach((ev) =>
+        dropzone.addEventListener(ev, (e) => {
+          e.preventDefault();
+          dropzone.classList.remove("drag-over");
+        })
+      );
+      dropzone.addEventListener("drop", (e) => {
+        const f = e.dataTransfer.files && e.dataTransfer.files[0];
+        if (f) loadFile(f);
+      });
+
+      // --- Timestamp display ------------------------------------------------
+      function fmt(t) {
+        if (!isFinite(t)) return "—";
+        const m = Math.floor(t / 60);
+        const s = Math.floor(t % 60);
+        const ms = Math.floor((t - Math.floor(t)) * 1000);
+        return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}.${String(ms).padStart(3, "0")}`;
+      }
+      player.addEventListener("timeupdate", () => {
+        $("timestamp").textContent = fmt(player.currentTime);
+      });
+      player.addEventListener("seeked", () => {
+        $("timestamp").textContent = fmt(player.currentTime);
+      });
+
+      // --- The snap button --------------------------------------------------
+      // This is the whole point of the page. Same body shape as the
+      // glasses.html snap() function so there's no backend divergence.
+      async function snap() {
+        if (!player.videoWidth) {
+          log("load a video first", "warn");
+          return;
+        }
+        $("snap").disabled = true;
+        setStatus("snapping…", "warn");
+        const t0 = performance.now();
+        try {
+          const canvas = $("snap-canvas");
+          const w = player.videoWidth;
+          const h = player.videoHeight;
+          const scale = Math.min(1, MAX_EDGE_PX / Math.max(w, h));
+          canvas.width = Math.round(w * scale);
+          canvas.height = Math.round(h * scale);
+          const ctx = canvas.getContext("2d");
+          // drawImage on a <video> captures whatever frame is currently
+          // displayed, whether paused, seeking, or playing.
+          ctx.drawImage(player, 0, 0, canvas.width, canvas.height);
+          const dataUrl = canvas.toDataURL("image/jpeg", JPEG_QUALITY);
+          const base64 = dataUrl.split(",", 2)[1];
+
+          const backend = $("backend").value.trim().replace(/\/$/, "");
+          const session = $("session").value.trim() || "demo";
+          const question = $("question").value.trim();
+
+          const body = {
+            image_b64: base64,
+            session_id: session,
+            capture_mode: CAPTURE_MODE,
+          };
+          if (question) body.question = question;
+
+          log(`snap @ ${fmt(player.currentTime)} · POST ${backend}/snap (${Math.round(base64.length / 1024)} KB)`);
+          const resp = await fetch(`${backend}/snap`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+          });
+          if (!resp.ok) throw new Error(`HTTP ${resp.status}: ${await resp.text()}`);
+          const j = await resp.json();
+          const ms = Math.round(performance.now() - t0);
+          log(
+            `snap done in ${ms} ms · qid=${j.question_id || "-"} · objects=${(j.objects||[]).length} · visible=${(j.text_visible||[]).length}`,
+            "ok"
+          );
+          setStatus(`snap ok · ${ms} ms`, "live");
+          renderResult(j, dataUrl);
+        } catch (e) {
+          log(String(e), "err");
+          setStatus("snap failed", "err");
+        } finally {
+          $("snap").disabled = false;
+        }
+      }
+
+      function renderResult(j, thumbDataUrl) {
+        const el = $("result");
+        const objs = (j.objects || []).map((o) => `<span class="chip">${escape(o)}</span>`).join("");
+        const vis = (j.text_visible || []).map((v) => `<span class="chip vis">${escape(v)}</span>`).join("");
+        const qid = j.question_id
+          ? `<code>${escape(j.question_id)}</code>`
+          : `<span style="color: var(--muted)">(no question fired)</span>`;
+        el.innerHTML = `
+          <div><strong>Scene summary:</strong> ${escape(j.text_summary || "—")}</div>
+          <div class="section-label">Objects</div>
+          <div>${objs || '<span style="color:var(--muted)">—</span>'}</div>
+          <div class="section-label">Visible text</div>
+          <div>${vis || '<span style="color:var(--muted)">—</span>'}</div>
+          <div class="section-label">Question</div>
+          <div>${qid}</div>
+          <div class="section-label">Captured frame</div>
+          <img src="${thumbDataUrl}" alt="captured frame" />
+        `;
+        el.classList.add("show");
+      }
+
+      function escape(s) {
+        return String(s)
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/"/g, "&quot;");
+      }
+
+      $("snap").addEventListener("click", snap);
+
+      // Keyboard shortcut: space to play/pause (native), S to snap.
+      document.addEventListener("keydown", (e) => {
+        if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") return;
+        if (e.key === "s" || e.key === "S") {
+          e.preventDefault();
+          snap();
+        }
+      });
+    </script>
+  </body>
+</html>

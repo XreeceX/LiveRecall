@@ -31,6 +31,12 @@ elevenlabs==1.13.1
 Pillow==11.0.0
 numpy==2.1.3
 
+# Meta Ray-Ban bridge (scripts/bridge_rayban.py) — decodes MP4 H.264 + AAC
+# and republishes synced audio+video into a LiveKit room as the "glasses"
+# participant. Only needed to run the bridge script; the FastAPI server +
+# agents themselves do not import `av`.
+av>=13.0
+
 # Misc
 httpx==0.27.2
 websockets==13.1
