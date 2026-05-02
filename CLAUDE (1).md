@@ -32,24 +32,31 @@
 > **MTSamples** (CC0 medical-transcription corpus, 35 notes across 7
 > specialties) for `transcripts`. Ingest scripts in `scripts/ingest_*.py`
 > emit JSONL fixtures under `data/fixtures/` (committed). `scripts/seed_mongo.py`
-> prefers fixtures, falls back to inline mock when missing, and re-labels the
-> most demo-relevant Synthea patient as `P-204` "Sarah Chen" with two
-> hand-shaped headline events injected on top for demo determinism. See
-> `data/README.md`.
+> calls `_seed_documents(dailymed, equipment)` which inserts both medication
+> AND equipment rows (with `image_b64` intact) into `documents` and embeds all
+> text in batches. Re-labels the most demo-relevant Synthea patient as `P-204`
+> "Sarah Chen" with **three** hand-shaped headline events injected on top
+> (metformin 500 mg admin ~47 h ago, eGFR=38 ~18 h ago, creatinine=1.7 ~18 h
+> ago) for demo determinism. See `data/README.md`.
 >
 > **Amended 2026-05-02 (f):** References retriever upgraded to a **multimodal
 > apparatus catalog** — every `documents` row now has shape
 > `(name, context, image)` where `category ∈ {medication, equipment, other}`.
 > DailyMed ingest pulls real FDA product-label photos via `/spls/{setid}/media`
-> (136 medication chunks, 100% with images). New `scripts/ingest_wikimedia_equipment.py`
-> adds ~23 bedside devices (infusion pump, pulse oximeter, defibrillator,
-> insulin pen, …) sourced from Wikipedia summaries + Commons thumbnails
-> (CC-BY-SA). Vision now extracts an `apparatus` list (canonical lowercase
-> names from the catalog vocabulary) so retrieval fires for *unlabelled*
-> equipment too, not just OCR'd drug names. Router can filter by `name` and
-> `category`. Dashboard renders inline thumbnails next to each retrieved
-> snippet so the audience sees the system match the actual physical thing.
-> See `backend/agents/vision.py`, `backend/agents/router.py`,
+> (136 medication chunks, 100% with images). `scripts/ingest_wikimedia_equipment.py`
+> now fetches **110 bedside devices** across 14 clinical categories (airway,
+> cardiac, vascular, monitoring, infusion, urological, dialysis, surgical,
+> imaging, lab, neuro, neonatal, wound, misc) sourced from Wikipedia summaries
+> + Commons thumbnails (CC-BY-SA); images downsized to 256 px JPEG + base64,
+> cached under `data/cache/wikimedia/`, deduplicated by friendly name before
+> fetching. `seed_mongo.py::_seed_documents()` inserts both medication and
+> equipment rows with `image_b64` preserved — previously equipment `image_b64`
+> was loaded from fixture but silently dropped at seed time (now fixed). Vision
+> extracts an `apparatus` list (canonical lowercase names from catalog
+> vocabulary) so retrieval fires for *unlabelled* equipment too, not just OCR'd
+> drug names. Router can filter by `name` and `category`. Dashboard renders
+> inline thumbnails next to each retrieved snippet. See
+> `backend/agents/vision.py`, `backend/agents/router.py`,
 > `dashboard/src/components/ReasoningTrace.tsx`.
 >
 > **Amended 2026-05-02 (g):** **Two capture modes** — the same Vision pipeline
@@ -255,7 +262,7 @@ Every state change is a Mongo write. Agents communicate via change streams.
 | `video_frames` | standard | Sampled frames (continuous + snap path) | Change streams |
 | `scene_context` | standard + Vector | Vision output (objects, **apparatus**, text_visible, embedding) | Atlas Vector Search |
 | `transcripts` | standard + Vector | Live STT output + past clinical notes (seeded from **MTSamples**) | Atlas Vector Search |
-| `documents` | standard + Vector | **Multimodal apparatus catalog** — `(name, context, image)` rows, `category ∈ {medication, equipment, other}`. Medication rows seeded from **DailyMed FDA SPL** with real product photos; equipment rows seeded from **Wikimedia Commons + Wikipedia** (CC-BY-SA) with device photos. | Atlas Vector Search |
+| `documents` | standard + Vector | **Multimodal apparatus catalog** — `(name, context, image)` rows, `category ∈ {medication, equipment, other}`. Medication rows (136 chunks, 10 drugs) seeded from **DailyMed FDA SPL** with real product photos. Equipment rows (**110 entries**, 14 clinical categories) seeded from **Wikimedia Commons + Wikipedia** (CC-BY-SA) with device photos. Both inserted by `_seed_documents()` with `image_b64` intact. | Atlas Vector Search |
 | `clinical_events` | **Time Series** | Per-patient timeline (vitals, meds, labs, notes) — seeded from **Synthea** | Time Series collection |
 | `patients` | standard | Patient master records — seeded from **Synthea** (1 re-labelled as P-204 for demo) | Document model |
 | `retrieval_plans` | standard | Router output | Change streams |
@@ -357,10 +364,10 @@ See TEAM_SPLIT.md for hourly task lists. Sync points at +1, +2.5, +4, +5, +5.5 h
 5. A second pill bottle in the background ("LISINOPRIL 10 mg") for the multi-drug variant
 
 **Seed Mongo** (Stream C, by hour 2):
-- 5 patients (P-201..P-205) with allergies + active conditions; **P-204 has chronic kidney disease and a recent eGFR=38 lab**
-- 50 clinical events over 6 months in the Time Series collection (vitals, medication administrations, lab results, free-text notes); biased so P-204's most recent metformin admin is **47 hours ago**
-- 3 reference documents chunked + embedded (~30 chunks): metformin monograph (dosing, interactions, **renal contraindications**), insulin sliding-scale protocol, generic medication-safety "5 rights" protocol
-- 5 past clinical handoff notes / dictations (used for the History/Notes retriever)
+- 5 patients (P-201..P-205) with allergies + active conditions; **P-204 "Sarah Chen" has chronic kidney disease and a recent eGFR=38 lab** (most demo-relevant Synthea patient re-labelled)
+- Clinical events in the Time Series collection (Synthea-sourced + 3 hand-shaped headline events): metformin 500 mg admin **47 h ago**, eGFR=38 **18 h ago**, creatinine=1.7 **18 h ago**
+- `documents` collection: DailyMed 136 medication chunks (10 drugs, with product photos) + Wikimedia **110 equipment entries** (with device photos) — all with `image_b64` + `text_embedding`
+- Past clinical handoff notes seeded from MTSamples (CC0) via `_seed_past_notes()`
 
 **Demo question**: *"Is it safe to give this dose now? When did they last receive it?"*
 
