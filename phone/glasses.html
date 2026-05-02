@@ -3,14 +3,36 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-    <title>LiveRecall · Phone (fallback)</title>
+    <title>LiveRecall · Glasses (POV)</title>
     <link rel="icon" href="data:," />
+    <!--
+      LiveRecall capture entry point #2 — Meta Ray-Ban / first-person POV.
+
+      Why this exists:
+        - Ray-Ban Meta v2 with Live AI is the headline capture device for the
+          product: hands-free, first-person, the clinician's natural field of
+          view. That's the bedside-medication-safety story we want to pitch.
+        - In a hackathon we cannot integrate Meta's actual Ray-Ban SDK end to
+          end — the Live AI APIs are still gated and the View app does not
+          expose a public WebRTC publish endpoint. So this page is a
+          *stand-in*: it captures from any first-person-framed camera (a
+          laptop webcam, a phone in a head strap, an actual Ray-Ban screen
+          mirror) and announces capture_mode="glasses" to the backend. The
+          rest of the pipeline is identical to the phone path.
+        - Path to a real integration is documented in DECISIONS.md (g):
+          Meta Live AI stream → LiveKit ingress → backend worker subscribes
+          to the same room and captures audio + video as today. The Vision
+          agent doesn't need to know which way the bytes arrived — just the
+          POV hint, which lives on the session.
+
+      Phone fallback ('safety mode') lives at phone/index.html.
+    -->
     <style>
       :root {
         color-scheme: dark;
-        --bg: #0b0d12;
-        --panel: #131722;
-        --accent: #6ee7b7;
+        --bg: #0a0d18;
+        --panel: #131a2a;
+        --accent: #a78bfa;        /* purple — distinguishes glasses from phone */
         --accent-2: #60a5fa;
         --warn: #fbbf24;
         --err: #f87171;
@@ -20,7 +42,10 @@
       * { box-sizing: border-box; }
       html, body { height: 100%; margin: 0; }
       body {
-        background: var(--bg);
+        background:
+          radial-gradient(1200px 600px at 80% -10%, rgba(167, 139, 250, 0.18), transparent 60%),
+          radial-gradient(800px 400px at 0% 100%, rgba(96, 165, 250, 0.12), transparent 60%),
+          var(--bg);
         color: var(--text);
         font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
         display: flex;
@@ -45,14 +70,14 @@
         text-transform: uppercase;
         letter-spacing: 0.6px;
       }
-      .pill.live { background: rgba(110, 231, 183, 0.15); color: var(--accent); }
+      .pill.live { background: rgba(167, 139, 250, 0.18); color: var(--accent); }
       .pill.warn { background: rgba(251, 191, 36, 0.15); color: var(--warn); }
       .pill.err { background: rgba(248, 113, 113, 0.18); color: var(--err); }
-      /* Capture-mode badge: slate/grey for phone (fallback / safety mode). */
-      .pill.mode-phone {
-        background: rgba(148, 163, 184, 0.18);
-        color: #cbd5e1;
-        border: 1px solid rgba(148, 163, 184, 0.35);
+      /* Capture-mode badge: purple/blue for glasses (preferred POV). */
+      .pill.mode-glasses {
+        background: linear-gradient(90deg, rgba(167, 139, 250, 0.25), rgba(96, 165, 250, 0.18));
+        color: #ddd6fe;
+        border: 1px solid rgba(167, 139, 250, 0.45);
       }
 
       .panel {
@@ -64,7 +89,7 @@
       label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
       input {
         width: 100%;
-        background: #0b0d12;
+        background: #0a0d18;
         color: var(--text);
         border: 1px solid #1f2937;
         border-radius: 10px;
@@ -85,26 +110,61 @@
         transition: transform 0.05s ease;
       }
       button:active { transform: scale(0.98); }
-      .btn-primary { background: var(--accent); color: #053524; }
+      .btn-primary {
+        background: linear-gradient(90deg, var(--accent), var(--accent-2));
+        color: #0a0d18;
+      }
       .btn-secondary { background: #1f2937; color: var(--text); }
       .btn-danger { background: rgba(248, 113, 113, 0.2); color: var(--err); }
 
-      video {
+      /* POV viewport — wider 16:9 framing to evoke first-person glasses. */
+      .pov-frame {
+        position: relative;
         width: 100%;
-        max-height: 36vh;
-        border-radius: 12px;
+        aspect-ratio: 16 / 9;
+        border-radius: 16px;
+        overflow: hidden;
         background: #000;
+        border: 1px solid rgba(167, 139, 250, 0.3);
+        box-shadow: 0 0 0 1px rgba(167, 139, 250, 0.15) inset;
+      }
+      .pov-frame video {
+        width: 100%;
+        height: 100%;
         object-fit: cover;
+        display: block;
+      }
+      /* Subtle reticle to sell the "first-person" framing. */
+      .pov-frame::after {
+        content: "";
+        position: absolute;
+        inset: 8px;
+        border-radius: 12px;
+        border: 1px dashed rgba(167, 139, 250, 0.25);
+        pointer-events: none;
+      }
+      .pov-tag {
+        position: absolute;
+        top: 10px;
+        left: 10px;
+        font-size: 10px;
+        letter-spacing: 0.8px;
+        text-transform: uppercase;
+        color: #ddd6fe;
+        background: rgba(10, 13, 24, 0.6);
+        padding: 4px 8px;
+        border-radius: 6px;
+        border: 1px solid rgba(167, 139, 250, 0.35);
       }
 
       #log {
         font-family: ui-monospace, "JetBrains Mono", Menlo, monospace;
         font-size: 12px;
         line-height: 1.5;
-        background: #07090d;
+        background: #060914;
         border-radius: 10px;
         padding: 10px;
-        height: 22vh;
+        height: 18vh;
         overflow-y: auto;
         white-space: pre-wrap;
       }
@@ -115,7 +175,7 @@
 
       .level {
         height: 6px;
-        background: #0b0d12;
+        background: #0a0d18;
         border-radius: 999px;
         overflow: hidden;
       }
@@ -126,23 +186,28 @@
         background: linear-gradient(90deg, var(--accent), var(--accent-2));
         transition: width 0.1s linear;
       }
+
+      .footnote {
+        font-size: 11px;
+        color: var(--muted);
+        line-height: 1.55;
+      }
+      .footnote a { color: var(--accent); }
     </style>
   </head>
   <body>
     <header>
-      <h1>LiveRecall <small>· phone</small></h1>
+      <h1>LiveRecall <small>· glasses (POV)</small></h1>
       <div style="display: flex; gap: 6px; align-items: center;">
         <!--
-          Phone is the universal fallback / safety mode. Every clinician
-          already carries one, so this page lets the entire clinic adopt
-          without buying any new hardware. The headline POV is glasses
-          (see phone/glasses.html); this page exists so we never block on
-          hardware availability. See DECISIONS.md (g).
+          Glasses is the headline POV: first-person, hands-free, continuous.
+          See DECISIONS.md (g) for the rationale and the path to a real
+          Ray-Ban Live AI integration.
         -->
         <span
-          class="pill mode-phone"
-          title="Phone is the universal fallback. Glasses are the headline POV (see /glasses.html)."
-        >📱 Phone · fallback</span>
+          class="pill mode-glasses"
+          title="First-person POV via Ray-Ban (or any first-person-framed camera as a stand-in)."
+        >🕶️ Glasses · POV</span>
         <span id="status" class="pill">disconnected</span>
       </div>
     </header>
@@ -154,7 +219,7 @@
       <div class="row">
         <div>
           <label>Identity</label>
-          <input id="identity" placeholder="kalle-phone" />
+          <input id="identity" placeholder="kalle-glasses" />
         </div>
         <div>
           <label>Room</label>
@@ -163,12 +228,15 @@
       </div>
     </div>
 
-    <video id="preview" autoplay playsinline muted></video>
+    <div class="pov-frame">
+      <video id="preview" autoplay playsinline muted></video>
+      <span class="pov-tag">POV · first-person</span>
+    </div>
 
     <div class="level"><span id="meter"></span></div>
 
     <div class="row">
-      <button id="connect" class="btn-primary">Connect</button>
+      <button id="connect" class="btn-primary">Connect (Ray-Ban POV)</button>
       <button id="disconnect" class="btn-danger" disabled>Leave</button>
     </div>
 
@@ -193,19 +261,31 @@
       <div id="log"></div>
     </div>
 
+    <div class="panel footnote">
+      <strong>Capture path.</strong> This page captures from the local webcam
+      (laptop or phone in a head strap) framed as first-person POV — a
+      hackathon-tractable stand-in for the Meta Ray-Ban Live AI stream.
+      Announces <code>capture_mode=glasses</code> to the backend so the Vision
+      agent uses the first-person POV hint. The path to a real Ray-Ban
+      integration (Live AI → LiveKit ingress) is documented in
+      <code>DECISIONS.md</code> entry (g). The phone fallback (universal,
+      no-hardware path) lives at <a href="./index.html">phone/index.html</a>.
+    </div>
+
     <canvas id="snap-canvas" style="display: none"></canvas>
 
     <audio id="answer" autoplay playsinline></audio>
 
     <script src="https://cdn.jsdelivr.net/npm/livekit-client/dist/livekit-client.umd.min.js"></script>
     <script>
-      const { Room, RoomEvent, Track, createLocalTracks, ConnectionState, DataPacket_Kind } = LivekitClient;
+      const { Room, RoomEvent, Track, createLocalTracks, ConnectionState } = LivekitClient;
 
-      // This page is the phone fallback. Glasses use phone/glasses.html and
-      // announce CAPTURE_MODE = "glasses" instead. Backend persists this on
-      // the session document at /token time and stamps it on every
-      // scene_context — see backend/main.py + backend/agents/vision.py.
-      const CAPTURE_MODE = "phone";
+      // This page advertises the headline first-person POV mode. The phone
+      // fallback at phone/index.html sets CAPTURE_MODE = "phone" instead.
+      // The backend persists this on the session at /token time and stamps
+      // it on every scene_context — see backend/main.py +
+      // backend/agents/vision.py::_system_prompt_for.
+      const CAPTURE_MODE = "glasses";
 
       const $ = (id) => document.getElementById(id);
       const log = (msg, cls = "") => {
@@ -226,13 +306,13 @@
 
       const params = new URLSearchParams(location.search);
       $("backend").value = params.get("backend") || localStorage.getItem("backend") || "http://localhost:8000";
-      $("identity").value = params.get("identity") || localStorage.getItem("identity") || "kalle-phone";
+      $("identity").value = params.get("identity") || localStorage.getItem("identity_glasses") || "kalle-glasses";
       $("room").value = params.get("room") || localStorage.getItem("room") || "liverecall-demo";
 
       async function fetchToken() {
         const backend = $("backend").value.trim().replace(/\/$/, "");
         const body = {
-          identity: $("identity").value.trim() || "phone",
+          identity: $("identity").value.trim() || "glasses",
           room: $("room").value.trim() || "liverecall-demo",
           capture_mode: CAPTURE_MODE,
         };
@@ -249,12 +329,16 @@
         try {
           $("connect").disabled = true;
           setStatus("connecting…", "warn");
-          const { token, url } = await fetchToken();
-          log(`got token, url=${url}`, "ok");
+          const { token, url, capture_mode } = await fetchToken();
+          log(`got token, url=${url}, capture_mode=${capture_mode}`, "ok");
 
+          // Prefer rear-facing camera when on a phone-in-head-strap setup;
+          // laptop webcams will gracefully fall back to whichever camera is
+          // available. 720p strikes a balance between Vision detail and
+          // bandwidth on LiveKit Cloud's free tier.
           const tracks = await createLocalTracks({
             audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-            video: { facingMode: "environment", resolution: { width: 640, height: 480 }, frameRate: 24 },
+            video: { facingMode: "environment", resolution: { width: 1280, height: 720 }, frameRate: 24 },
           });
 
           const room = new Room({ adaptiveStream: true, dynacast: true });
@@ -262,7 +346,7 @@
 
           room.on(RoomEvent.ConnectionStateChanged, (s) => {
             log(`connection: ${s}`);
-            if (s === ConnectionState.Connected) setStatus("live", "live");
+            if (s === ConnectionState.Connected) setStatus("live · POV", "live");
             if (s === ConnectionState.Disconnected) setStatus("disconnected", "err");
           });
           room.on(RoomEvent.TrackSubscribed, (track, _pub, participant) => {
@@ -271,12 +355,6 @@
               const el = $("answer");
               track.attach(el);
             }
-          });
-          room.on(RoomEvent.DataReceived, (payload) => {
-            try {
-              const text = new TextDecoder().decode(payload);
-              log(`data: ${text}`);
-            } catch (_) {}
           });
 
           await room.connect(url, token);
@@ -291,11 +369,11 @@
           }
 
           localStorage.setItem("backend", $("backend").value);
-          localStorage.setItem("identity", $("identity").value);
+          localStorage.setItem("identity_glasses", $("identity").value);
           localStorage.setItem("room", $("room").value);
 
           $("disconnect").disabled = false;
-          log("connected and publishing audio + video", "ok");
+          log("connected · publishing audio + first-person video", "ok");
         } catch (e) {
           log(String(e), "err");
           setStatus("error", "err");
@@ -342,7 +420,6 @@
           const canvas = $("snap-canvas");
           const w = video.videoWidth;
           const h = video.videoHeight;
-          // downscale to <=640px for fast Vision + small POST body
           const scale = Math.min(1, 640 / Math.max(w, h));
           canvas.width = Math.round(w * scale);
           canvas.height = Math.round(h * scale);
@@ -358,7 +435,7 @@
             session_id: $("room").value.trim().replace(/^liverecall-/, "") || "demo",
             capture_mode: CAPTURE_MODE,
           };
-          log(`snap: posting frame (${Math.round(base64.length / 1024)} KB)…`);
+          log(`snap: posting POV frame (${Math.round(base64.length / 1024)} KB)…`);
           const resp = await fetch(`${backend}/snap`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -369,7 +446,7 @@
           $("snap-img").src = dataUrl;
           $("snap-thumb").style.display = "block";
           const visible = (j.text_visible || []).join(" · ") || "—";
-          $("snap-summary").textContent = `${j.text_summary || ""}  •  visible: ${visible}`;
+          $("snap-summary").textContent = `${j.text_summary || ""}  •  visible: ${visible}  •  mode: ${j.capture_mode || "?"}`;
           if (j.question_id) {
             log(`snap: question fired (id=${j.question_id})`, "ok");
           } else {

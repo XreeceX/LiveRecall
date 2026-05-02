@@ -1,7 +1,7 @@
 """LiveKit Agents worker — the bridge between the room and the agent pipeline.
 
 Per session/room:
-  - Subscribes to remote audio track → Deepgram streaming STT.
+  - Subscribes to remote audio track → ElevenLabs Scribe v2 Realtime STT.
   - Subscribes to remote video track → 1 fps frame sampler → `video_frames`.
   - Publishes one outbound audio track; Answerer streams TTS into it.
 
@@ -27,7 +27,7 @@ from PIL import Image
 
 from .config import settings
 from .mongo import collection, init_collections
-from .stt import DeepgramSession
+from .stt import ScribeSession
 from .tracing import trace_event
 from .util import new_id, now_ms
 
@@ -49,9 +49,16 @@ async def entrypoint(ctx: JobContext) -> None:
     room = ctx.room
     session_id = _session_id_from_room(room.name)
     log.info("worker joined room=%s session=%s", room.name, session_id)
+    # Use $setOnInsert for fields the /token endpoint may have already written
+    # (capture_mode, started_at) so we don't blow them away when the worker
+    # joins. /token is the authoritative writer for capture_mode; the worker
+    # only refreshes the room/ended_at fields on every join.
     await collection("sessions").update_one(
         {"_id": session_id},
-        {"$set": {"_id": session_id, "room": room.name, "started_at": now_ms(), "ended_at": None}},
+        {
+            "$set": {"room": room.name, "ended_at": None},
+            "$setOnInsert": {"_id": session_id, "started_at": now_ms()},
+        },
         upsert=True,
     )
 
@@ -84,7 +91,7 @@ async def entrypoint(ctx: JobContext) -> None:
 
 async def _consume_audio(track: rtc.Track, session_id: str) -> None:
     log.info("audio track subscribed (session=%s)", session_id)
-    stt = DeepgramSession(session_id=session_id)
+    stt = ScribeSession(session_id=session_id)
     await stt.start()
     try:
         astream = rtc.AudioStream(track)

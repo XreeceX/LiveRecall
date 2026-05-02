@@ -15,31 +15,31 @@ const LANES: Lane[] = [
     id: "vision",
     label: "Vision",
     collections: ["video_frames", "scene_context"],
-    hint: "GPT-4o · structured scene extraction",
+    hint: "GPT-4o · OCR + apparatus recognition (10 meds, 23 devices) · MRNs · vitals",
   },
   {
     id: "router",
     label: "Router",
     collections: ["questions", "retrieval_plans"],
-    hint: "GPT-4o-mini · 3 differentiated queries",
+    hint: "GPT-4o-mini · 3 queries (filters by patient_id, apparatus name, category)",
   },
   {
     id: "retrievers",
     label: "Retrievers",
     collections: ["retrieval_results"],
-    hint: "Manuals · Logs · History · parallel Mongo aggregation",
+    hint: "References (multimodal: name+context+image) · Events · Notes — local cache hits ~5ms",
   },
   {
     id: "reranker",
     label: "Reranker",
     collections: ["final_context"],
-    hint: "GPT-4o-mini · boosts based on what was just seen",
+    hint: "GPT-4o-mini · boosts on visible drug + MRN + may fire active follow-up tool calls",
   },
   {
     id: "answerer",
     label: "Answerer",
     collections: ["answers"],
-    hint: "GPT-4o-mini streaming → ElevenLabs Flash v2.5",
+    hint: "GPT-4o-mini streaming · cautious decision-support tone → ElevenLabs Flash v2.5",
   },
 ];
 

@@ -30,10 +30,10 @@ from pymongo.errors import CollectionInvalid, OperationFailure
 from shared.types import (
     COL_AGENT_TRACES,
     COL_ANSWERS,
+    COL_CLINICAL_EVENTS,
     COL_DOCUMENTS,
     COL_FINAL_CONTEXT,
-    COL_MACHINES,
-    COL_MAINTENANCE_EVENTS,
+    COL_PATIENTS,
     COL_QUESTIONS,
     COL_RETRIEVAL_PLANS,
     COL_RETRIEVAL_RESULTS,
@@ -96,17 +96,17 @@ async def init_collections() -> None:
     """
     db = get_db()
 
-    # --- Time Series collection (maintenance_events) ---
+    # --- Time Series collection (clinical_events, per-patient) ---
     try:
         await db.create_collection(
-            COL_MAINTENANCE_EVENTS,
+            COL_CLINICAL_EVENTS,
             timeseries={
                 "timeField": "timestamp",
-                "metaField": "machine_id",
+                "metaField": "patient_id",
                 "granularity": "hours",
             },
         )
-        log.info("created time-series collection: %s", COL_MAINTENANCE_EVENTS)
+        log.info("created time-series collection: %s", COL_CLINICAL_EVENTS)
     except CollectionInvalid:
         pass
     except OperationFailure as e:
@@ -126,7 +126,7 @@ async def init_collections() -> None:
         COL_ANSWERS,
         COL_QUESTIONS,
         COL_AGENT_TRACES,
-        COL_MACHINES,
+        COL_PATIENTS,
     ]
     existing = set(await db.list_collection_names())
     for name in plain:
@@ -153,7 +153,7 @@ async def init_collections() -> None:
     await collection(COL_AGENT_TRACES).create_index(
         [("question_id", ASCENDING), ("timestamp", ASCENDING)]
     )
-    await collection(COL_MACHINES).create_index([("machine_id", ASCENDING)], unique=True)
+    await collection(COL_PATIENTS).create_index([("patient_id", ASCENDING)], unique=True)
 
     # --- TTL on GridFS clip files (24h) ---
     try:

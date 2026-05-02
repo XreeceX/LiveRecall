@@ -1,26 +1,39 @@
-"""Deepgram Nova-2 streaming STT.
+"""ElevenLabs Scribe v2 Realtime streaming STT.
 
-Per-track usage:
+Per-track usage (matches what backend/worker.py expects):
 
-    stt = DeepgramSession(session_id=..., on_question=...)
+    stt = ScribeSession(session_id=..., on_question=...)
     await stt.start()
     while True:
         pcm = await track.next_frame()  # 16k mono PCM s16
         await stt.send(pcm)
 
-Final transcripts are embedded and written to `transcripts`. When a transcript
-qualifies as a question (cf. util.is_question), a `questions` doc is inserted —
-which the Router picks up via change stream.
+ElevenLabs Scribe v2 Realtime is a websocket transcription service:
+  - URL:    wss://api.elevenlabs.io/v1/speech-to-text/realtime
+  - Auth:   xi-api-key header
+  - Send:   {"message_type": "input_audio_chunk", "audio_base_64": "...",
+             "sample_rate": 16000}
+  - Recv:   {"message_type": "partial_transcript",  "text": "..."}
+            {"message_type": "committed_transcript","text": "..."}
+
+We use VAD-based commits so the model decides when an utterance is finished.
+On each `committed_transcript` we embed + insert into `transcripts`. If the
+text qualifies as a question (cf. util.is_question), we also insert a
+`questions` doc — Router subscribes to that change stream.
+
+Why ElevenLabs (not Deepgram): see DECISIONS.md.
 """
 
 from __future__ import annotations
 
 import asyncio
+import base64
+import json
 import logging
 from collections.abc import Callable
 from typing import Any
 
-from deepgram import DeepgramClient, LiveOptions, LiveTranscriptionEvents
+import websockets
 
 from .config import settings
 from .embeddings import embed
@@ -30,11 +43,21 @@ from .util import is_question, new_id, now_ms
 
 log = logging.getLogger("stt")
 
-LiveResultEvent = LiveTranscriptionEvents.Transcript
+SCRIBE_URL = (
+    "wss://api.elevenlabs.io/v1/speech-to-text/realtime"
+    "?model_id=scribe_v2_realtime"
+    "&audio_format=pcm_16000"
+    "&commit_strategy=vad"
+    "&language_code=en"
+    "&vad_silence_threshold_secs=0.6"
+    "&vad_threshold=0.5"
+    "&min_speech_duration_ms=120"
+    "&min_silence_duration_ms=200"
+)
 
 
-class DeepgramSession:
-    """One Deepgram websocket per LiveKit audio track."""
+class ScribeSession:
+    """One Scribe v2 Realtime websocket per LiveKit audio track."""
 
     def __init__(
         self,
@@ -46,57 +69,81 @@ class DeepgramSession:
         self.session_id = session_id
         self.on_question = on_question
         self.sample_rate = sample_rate
-        self._connection = None
-        self._dg = DeepgramClient(settings.deepgram_api_key)
+        self._ws: websockets.WebSocketClientProtocol | None = None
+        self._recv_task: asyncio.Task[None] | None = None
         self._closed = False
 
     async def start(self) -> None:
-        opts = LiveOptions(
-            model="nova-2",
-            language="en-US",
-            encoding="linear16",
-            sample_rate=self.sample_rate,
-            channels=1,
-            punctuate=True,
-            interim_results=True,
-            smart_format=True,
-            endpointing=300,
-            vad_events=True,
+        headers = {"xi-api-key": settings.elevenlabs_api_key}
+        self._ws = await websockets.connect(
+            SCRIBE_URL,
+            extra_headers=headers,
+            max_size=None,
+            ping_interval=20,
+            ping_timeout=20,
         )
-        conn = self._dg.listen.asynclive.v("1")
-        conn.on(LiveTranscriptionEvents.Transcript, self._on_transcript)
-        conn.on(LiveTranscriptionEvents.Error, self._on_error)
-        ok = await conn.start(opts)
-        if not ok:
-            raise RuntimeError("Deepgram failed to start")
-        self._connection = conn
-        log.info("deepgram session started (session=%s)", self.session_id)
+        self._recv_task = asyncio.create_task(self._recv_loop())
+        log.info("scribe session started (session=%s)", self.session_id)
 
     async def send(self, pcm_bytes: bytes) -> None:
-        if self._connection and not self._closed:
-            await self._connection.send(pcm_bytes)
+        if not self._ws or self._closed or not pcm_bytes:
+            return
+        try:
+            await self._ws.send(json.dumps({
+                "message_type": "input_audio_chunk",
+                "audio_base_64": base64.b64encode(pcm_bytes).decode("ascii"),
+                "sample_rate": self.sample_rate,
+            }))
+        except websockets.ConnectionClosed:
+            self._closed = True
 
     async def close(self) -> None:
         self._closed = True
-        if self._connection:
-            await self._connection.finish()
-            self._connection = None
+        if self._recv_task:
+            self._recv_task.cancel()
+            try:
+                await self._recv_task
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                pass
+            self._recv_task = None
+        if self._ws:
+            try:
+                await self._ws.close()
+            finally:
+                self._ws = None
 
-    # -- handlers --------------------------------------------------------------
+    # -- internals -------------------------------------------------------------
 
-    async def _on_transcript(self, _conn, result, **_kwargs) -> None:
+    async def _recv_loop(self) -> None:
+        assert self._ws is not None
         try:
-            alt = result.channel.alternatives[0]
-            text = (alt.transcript or "").strip()
-            if not text:
-                return
-            is_final = bool(getattr(result, "is_final", False))
-            await self._record(text, is_final=is_final)
+            async for raw in self._ws:
+                try:
+                    msg = json.loads(raw)
+                except json.JSONDecodeError:
+                    continue
+                mtype = msg.get("message_type")
+                text = (msg.get("text") or "").strip()
+                if not text:
+                    if mtype == "session_started":
+                        log.info(
+                            "scribe session_started session_id=%s",
+                            msg.get("session_id"),
+                        )
+                    elif mtype in {"error", "auth_error", "rate_limited", "quota_exceeded"}:
+                        log.error("scribe error: %s", msg)
+                    continue
+                if mtype == "partial_transcript":
+                    await self._record(text, is_final=False)
+                elif mtype in ("committed_transcript", "committed_transcript_with_timestamps"):
+                    await self._record(text, is_final=True)
+                elif mtype in {"error", "auth_error", "rate_limited", "quota_exceeded"}:
+                    log.error("scribe error: %s", msg)
+        except websockets.ConnectionClosed as e:
+            if not self._closed:
+                log.warning("scribe ws closed: %s", e)
         except Exception as e:  # noqa: BLE001
-            log.exception("transcript handler failed: %s", e)
-
-    async def _on_error(self, _conn, error, **_kwargs) -> None:
-        log.error("deepgram error: %s", error)
+            log.exception("scribe recv loop crashed: %s", e)
 
     async def _record(self, text: str, *, is_final: bool) -> None:
         question = is_final and is_question(text)
@@ -141,3 +188,8 @@ class DeepgramSession:
 async def _maybe_await(x: Any) -> None:
     if asyncio.iscoroutine(x):
         await x
+
+
+# Back-compat alias so callers that imported the old class name still work
+# during the swap transition.
+DeepgramSession = ScribeSession
