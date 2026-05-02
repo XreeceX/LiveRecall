@@ -416,42 +416,82 @@ async def _seed_clinical_events(
     log.info("seeded %d clinical events into time-series", len(docs))
 
 
-async def _seed_references(dailymed_chunks: list[dict]) -> None:
-    chunks_to_seed: list[dict] = []
+async def _seed_documents(
+    dailymed_chunks: list[dict],
+    equipment_rows: list[dict],
+) -> None:
+    docs_to_seed: list[dict] = []
+
+    # --- DailyMed medication chunks -----------------------------------------
     if dailymed_chunks:
         for c in dailymed_chunks:
-            chunks_to_seed.append({
+            docs_to_seed.append({
                 "_id": new_id("doc"),
+                "name": c.get("name") or c.get("medication") or "unknown",
+                "category": "medication",
                 "medication": c["medication"],
                 "source_doc": c["source_doc"],
                 "section": c["section"],
                 "text": c["text"],
                 "loinc": c.get("loinc"),
+                "image_b64": c.get("image_b64"),
+                "image_mime": c.get("image_mime"),
+                "image_attribution": c.get("image_attribution"),
+                "image_source_url": c.get("image_source_url"),
                 "_provenance": c.get("_provenance") or "dailymed",
             })
     else:
         for c in MOCK_REFERENCES:
-            chunks_to_seed.append({
+            docs_to_seed.append({
                 "_id": new_id("doc"),
                 **c,
                 "_provenance": "mock fallback",
             })
 
-    # Embed in batches to keep OpenAI calls reasonable.
-    texts = [f"{c['source_doc']} — {c['section']}: {c['text']}" for c in chunks_to_seed]
-    log.info("embedding %d reference chunks (batched)…", len(texts))
+    # --- Wikimedia equipment rows --------------------------------------------
+    if equipment_rows:
+        for e in equipment_rows:
+            docs_to_seed.append({
+                "_id": new_id("doc"),
+                "name": e["name"],
+                "category": "equipment",
+                "source_doc": e.get("source_doc") or f"Wikipedia: {e['name']}",
+                "section": "Overview",
+                "text": e["text"],
+                "image_b64": e.get("image_b64"),
+                "image_mime": e.get("image_mime"),
+                "image_attribution": e.get("image_attribution"),
+                "image_source_url": e.get("image_source_url"),
+                "_provenance": e.get("_provenance") or "en.wikipedia.org",
+            })
+    else:
+        for e in MOCK_EQUIPMENT:
+            docs_to_seed.append({
+                "_id": new_id("doc"),
+                **e,
+                "_provenance": "mock fallback",
+            })
+
+    # --- Embed all text in batches -------------------------------------------
+    texts = [
+        f"{d['source_doc']} — {d.get('section','')}: {d['text']}"
+        for d in docs_to_seed
+    ]
+    log.info("embedding %d documents (batched)…", len(texts))
     vectors: list[list[float]] = []
     for i in range(0, len(texts), EMBED_BATCH_SIZE):
         batch = texts[i : i + EMBED_BATCH_SIZE]
         vectors.extend(await embed_batch(batch))
-    for c, v in zip(chunks_to_seed, vectors):
-        c["text_embedding"] = v
-    await collection("documents").insert_many(chunks_to_seed)
+    for d, v in zip(docs_to_seed, vectors):
+        d["text_embedding"] = v
+
+    await collection("documents").insert_many(docs_to_seed)
     try:
         await collection("documents").create_index([("text", "text")])
     except Exception:  # noqa: BLE001
         pass
-    log.info("seeded %d reference chunks", len(chunks_to_seed))
+    with_img = sum(1 for d in docs_to_seed if d.get("image_b64"))
+    log.info("seeded %d documents (%d with images)", len(docs_to_seed), with_img)
 
 
 async def _seed_past_notes(mtsamples_notes: list[dict]) -> None:
@@ -503,10 +543,13 @@ async def _seed_session() -> None:
 # --- Provenance summary -----------------------------------------------------
 
 def _provenance_summary() -> dict[str, str]:
+    parts = []
+    if DAILYMED_FIXTURE.exists():
+        parts.append("DailyMed (FDA SPL)")
+    if WIKIMEDIA_FIXTURE.exists():
+        parts.append("Wikimedia/Wikipedia (CC-BY-SA)")
     return {
-        "documents": (
-            "DailyMed (FDA SPL)" if DAILYMED_FIXTURE.exists() else "mock fallback"
-        ),
+        "documents": " + ".join(parts) if parts else "mock fallback",
         "patients+clinical_events": (
             "Synthea v3.3 (Apache 2.0, MITRE)" if SYNTHEA_FIXTURE.exists() else "mock fallback"
         ),
@@ -521,12 +564,13 @@ async def main() -> None:
     await _wipe()
 
     dailymed = _load_dailymed()
+    equipment = _load_wikimedia_equipment()
     synthea_patients, synthea_events = _load_synthea()
     mtsamples = _load_mtsamples()
 
     demo_synthea_id = await _seed_patients(synthea_patients)
     await _seed_clinical_events(synthea_events, synthea_patients, demo_synthea_id)
-    await _seed_references(dailymed)
+    await _seed_documents(dailymed, equipment)
     await _seed_past_notes(mtsamples)
     await _seed_session()
 
