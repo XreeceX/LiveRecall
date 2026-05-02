@@ -1,7 +1,8 @@
-.PHONY: install backend worker seed dashboard phone clean
+.PHONY: install backend worker seed dashboard phone mock clean
 
 install:
 	python -m venv .venv && . .venv/bin/activate && pip install -r backend/requirements.txt
+	npm install
 	cd dashboard && npm install
 
 backend:
@@ -15,6 +16,9 @@ seed:
 
 dashboard:
 	cd dashboard && npm run dev
+
+mock:
+	node scripts/mock_ws.mjs
 
 phone:
 	cd phone && python -m http.server 8080

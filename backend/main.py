@@ -9,14 +9,11 @@
   - WS   /stream                        → change-stream fan-out for dashboard
   - POST /ask                           → text-only pipeline kick (debugging)
 
-Also wires the agent loops (vision / router / retrievers / reranker / answerer)
-into the FastAPI lifespan so a single `uvicorn backend.main:app` boots
-everything except the LiveKit worker process (run that separately).
+Agents run in worker.py (separate process). This server only needs MongoDB.
 """
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from contextlib import asynccontextmanager
 from datetime import timedelta
@@ -27,16 +24,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from livekit.api import AccessToken, VideoGrants
 from pydantic import BaseModel
 
+
 from shared.types import DEFAULT_CAPTURE_MODE, CaptureMode
 
-from .agents.answerer import (
-    answer_text_only,
-    run_answerer_loop,
-)
-from .agents.reranker import run_reranker_loop
-from .agents.retrievers import run_retrievers_loop
-from .agents.router import run_router_loop
-from .agents.vision import extract_scene, run_vision_loop
+from .agents.vision import extract_scene
 from .change_streams import hub, websocket_endpoint
 from .config import settings
 from .embeddings import embed
@@ -50,20 +41,10 @@ log = logging.getLogger("api")
 async def lifespan(app: FastAPI):
     await init_collections()
     await hub.start()
-    tasks = [
-        asyncio.create_task(run_vision_loop(), name="vision"),
-        asyncio.create_task(run_router_loop(), name="router"),
-        asyncio.create_task(run_retrievers_loop(), name="retrievers"),
-        asyncio.create_task(run_reranker_loop(), name="reranker"),
-        asyncio.create_task(_text_only_answerer_loop(), name="answerer-text"),
-    ]
-    log.info("agent loops started: %s", [t.get_name() for t in tasks])
     try:
         yield
     finally:
         await hub.stop()
-        for t in tasks:
-            t.cancel()
 
 
 app = FastAPI(title="LiveRecall", lifespan=lifespan)
@@ -73,12 +54,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-
-# --- Lightweight in-process answerer for text-only path ---------------------
-# Real audio answers happen in the LiveKit worker process via answer_to_room.
-async def _text_only_answerer_loop() -> None:
-    await run_answerer_loop(audio_source_provider=None)
 
 
 # --- Schemas -----------------------------------------------------------------

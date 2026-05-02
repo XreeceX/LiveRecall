@@ -184,74 +184,102 @@ from langgraph.graph import StateGraph
 
 ## Architecture
 
+Two entry paths. One Mongo bus. Five agents, each a change-stream subscriber.
+One pre-published outbound audio track. One observer (the dashboard).
+
 ```
-                     ┌──────────── Capture lane (two parallel sources, see (g)) ────────────┐
-                     │                                                                      │
-[Meta Ray-Ban v2 / first-person POV]      OR      [Phone browser / universal fallback]
-        │  (capture_mode="glasses")                       │  (capture_mode="phone")
-        │  phone/glasses.html  → LiveKit publish          │  phone/index.html  → LiveKit publish
-        │                                                  │
-        └──────────────── WebRTC: audio + video tracks ────┘
-                              │
-                              v
-[LiveKit Cloud room "liverecall"]
-   |
-   v
-[Backend: LiveKit Agents Python worker]
-   |
-   |  Subscribes to room
-   |  - Audio track  -->  Scribe v2 Realtime streaming STT  -->  transcripts (Mongo)
-   |  - Video track  -->  Frame sampler (1 fps)   -->  video_frames (Mongo)
-   |
-   v
-[MongoDB change streams trigger agents]
-   |
-   |  new video_frame  -->  Vision agent (GPT-4o)  -->  scene_context
-   |                      (objects + APPARATUS list + text_visible + summary)
-   |  new transcript   -->  Router (GPT-4o-mini)   -->  retrieval_plan
-   |
-   v
-[Retriever fan-out via change stream subscriptions]
-   |
-   |  References  -->  cache check → Mongo $vectorSearch on multimodal catalog
-   |                   (medications + equipment, each row carries name+context+image)
-   |  Events      -->  cache check → Mongo Time Series + patient_id filter
-   |  Notes       -->  Mongo $vectorSearch + recency boost (past handoffs)
-   |
-   |  ↑ Local Retrieval: Vision pre-warms the cache for any patient_id,
-   |    medication name, OR recognised apparatus (e.g. "infusion pump") it
-   |    sees, so by question-time the events + references retrievers usually
-   |    serve in ~5 ms instead of ~150–300 ms Mongo. See backend/local_cache.py.
-   |
-   v
-[Reranker Pass-1 (GPT-4o-mini): scene_context + retrieval_results
-   --> ranked_results + (optional) up to 2 active_followups]
-   |
-   |  ↳ if active_followups requested:
-   |    [Active Retrieval] parallel point queries on Mongo (~30–80 ms each):
-   |      get_latest_lab(patient_id, lab_name)
-   |      get_last_administration(patient_id, medication)
-   |      get_monograph_section(medication, section_keyword)
-   |    --> Reranker Pass-2 folds the new facts in.
-   |    See backend/agents/active_tools.py + backend/agents/reranker.py.
-   |
-   v
-[final_context (with active_followups + rerank_passes)]
-   |
-   v
-[Answerer (GPT-4o-mini, streaming): final_context --> answer tokens]
-   |
-   v  (streamed token-by-token)
-[ElevenLabs Flash v2.5 TTS streaming]
-   |
-   v  (audio chunks)
-[LiveKit publishes audio track back into room]
-   |
-   v
-[Phone subscribes, plays through Ray-Ban Bluetooth]
+INGEST ─ two parallel entry paths, both land in the same collections
+────────────────────────────────────────────────────────────────────
+  A) Streaming  (Meta Ray-Ban OR phone browser → LiveKit room)
+        audio ─► worker subscribes ─► Scribe v2 Realtime STT
+                                          │
+                                          ├─► transcripts        (every commit)
+                                          └─► questions          (when is_question)
+        video ─► worker subscribes ─► 1 fps sampler
+                                          └─► video_frames
+
+  B) Snap       (phone "Snap & ask"  →  POST /snap)
+        image ─► Vision (synchronous on this path)
+                    ├─► scene_context     (immediately)
+                    └─► questions         (only if a question text was sent)
+
+
+BUS ─ MongoDB Atlas. Every agent step is a Mongo write; every agent runs
+       off a watch() change-stream subscription on the collection it cares about.
+─────────────────────────────────────────────────────────────────────────────
+                                    ┌─────────────────────────────────────┐
+   subscribes to  ───────►  agent   │   writes  ───────►  collection      │
+                                    │                                     │
+   video_frames    ─►   Vision      │  GPT-4o     ─► scene_context        │
+                                    │              + warms SessionCache   │
+                                    │                (side channel,       │
+                                    │                 in-process,         │
+                                    │                 keyed on patient_id │
+                                    │                 + apparatus name)   │
+                                    │                                     │
+   questions       ─►   Router      │  4o-mini    ─► retrieval_plans      │
+                                    │  (reads last 30 s of scene_context) │
+                                    │                                     │
+   retrieval_plans ─►   Retrievers  │  no LLM, asyncio.gather:            │
+                                    │   • references  ($vectorSearch on   │
+                                    │      multimodal catalog;            │
+                                    │      cache-first ~5 ms)             │
+                                    │   • events     (Time Series +       │
+                                    │      patient_id filter; cache-first)│
+                                    │   • notes      ($vectorSearch +     │
+                                    │      recency boost)                 │
+                                    │             ─► retrieval_results    │
+                                    │                                     │
+   retrieval_plans ─►   Reranker    │  4o-mini, awaits the 3-result       │
+                                    │  bundle (≤4 s).                     │
+                                    │  Pass 1: ranks; may emit ≤2         │
+                                    │          active_followups           │
+                                    │  Active tools (parallel, 30–80 ms): │
+                                    │   get_latest_lab,                   │
+                                    │   get_last_administration,          │
+                                    │   get_monograph_section             │
+                                    │  Pass 2 (only if followups fired):  │
+                                    │          re-ranks with new facts    │
+                                    │             ─► final_context        │
+                                    │                                     │
+   final_context   ─►   Answerer    │  4o-mini STREAMING ─► answers       │
+                                    │             ─► tokens (below)       │
+                                    └─────────────────────────────────────┘
+
+
+OUTPUT ─ one outbound audio track, pre-published at room-join, reused
+         per answer. Tokens stream straight into it.
+─────────────────────────────────────────────────────────────────────
+   Answerer tokens
+        ─► ElevenLabs Flash v2.5 (websocket, PCM 16 k mono)
+            ─► capture_frame() into the pre-published rtc.AudioSource
+                ─► LiveKit room  ─► phone speaker  (paired BT optional)
+
+
+OBSERVABILITY ─ separate lane, never on the question hot path.
+──────────────────────────────────────────────────────────────
+   every agent ─► agent_traces  (MongoTraceCallback wraps every LLM call)
+
+   dashboard ◄─ WS /stream  (multiplexes change streams across the
+                              9 dashboard collections, throttled 10/s/coll)
 ```
 
-Every state change is a Mongo write. Agents communicate via change streams.
+Every state change is a Mongo write. Agents communicate only via change
+streams — no in-process function calls between agents — so the dashboard
+sees exactly what the pipeline sees, and any agent can be restarted in
+isolation without losing in-flight work.
+
+Two non-obvious wires worth knowing:
+
+- **`questions` is the Router's trigger, not `transcripts`.** STT writes
+  every committed transcript, but only utterances that pass `is_question()`
+  also create a `questions` doc. This keeps idle chatter from triggering the
+  retrieval pipeline. The same collection is the join point for `/snap`
+  (with a question), `/ask` (text-only debug), and the streaming STT path.
+- **Reranker watches `retrieval_plans`, not `retrieval_results`.** It then
+  awaits all 3 result writes for the same `plan_id` (with a 4 s ceiling)
+  before ranking once. This is why there's exactly one Reranker call per
+  question even though there are 3 retrievers.
 
 ## Mongo collections
 
