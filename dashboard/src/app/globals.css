@@ -1,0 +1,24 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html, body { height: 100%; }
+body {
+  background: radial-gradient(circle at 0% 0%, #11182b 0%, #06080d 60%) fixed;
+}
+
+/* Slim scrollbars */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-thumb { background: #1c2236; border-radius: 999px; }
+::-webkit-scrollbar-track { background: transparent; }
+
+.lane-glow { box-shadow: 0 0 0 1px rgba(110, 231, 183, 0.4), 0 8px 30px rgba(110, 231, 183, 0.1); }
+
+@keyframes pulse-fade {
+  0% { opacity: 1; transform: scale(1); }
+  60% { opacity: 0.5; transform: scale(1.02); }
+  100% { opacity: 0; transform: scale(1); }
+}
+.pulse {
+  animation: pulse-fade 1.6s ease-out forwards;
+}

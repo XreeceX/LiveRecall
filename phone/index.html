@@ -1,0 +1,295 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>LiveRecall · Phone</title>
+    <link rel="icon" href="data:," />
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #0b0d12;
+        --panel: #131722;
+        --accent: #6ee7b7;
+        --accent-2: #60a5fa;
+        --warn: #fbbf24;
+        --err: #f87171;
+        --text: #e5e7eb;
+        --muted: #94a3b8;
+      }
+      * { box-sizing: border-box; }
+      html, body { height: 100%; margin: 0; }
+      body {
+        background: var(--bg);
+        color: var(--text);
+        font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+        display: flex;
+        flex-direction: column;
+        padding: env(safe-area-inset-top) 16px env(safe-area-inset-bottom);
+        gap: 12px;
+      }
+      header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding-top: 12px;
+      }
+      h1 { font-size: 20px; margin: 0; letter-spacing: 0.5px; }
+      h1 small { color: var(--muted); font-weight: 400; font-size: 12px; }
+      .pill {
+        font-size: 11px;
+        padding: 4px 8px;
+        border-radius: 999px;
+        background: #1f2937;
+        color: var(--muted);
+        text-transform: uppercase;
+        letter-spacing: 0.6px;
+      }
+      .pill.live { background: rgba(110, 231, 183, 0.15); color: var(--accent); }
+      .pill.warn { background: rgba(251, 191, 36, 0.15); color: var(--warn); }
+      .pill.err { background: rgba(248, 113, 113, 0.18); color: var(--err); }
+
+      .panel {
+        background: var(--panel);
+        border: 1px solid #1f2937;
+        border-radius: 14px;
+        padding: 14px;
+      }
+      label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+      input {
+        width: 100%;
+        background: #0b0d12;
+        color: var(--text);
+        border: 1px solid #1f2937;
+        border-radius: 10px;
+        padding: 10px 12px;
+        font-size: 14px;
+      }
+      .row { display: flex; gap: 10px; }
+      .row > * { flex: 1; }
+
+      button {
+        appearance: none;
+        border: none;
+        font-weight: 600;
+        font-size: 15px;
+        padding: 14px 18px;
+        border-radius: 12px;
+        cursor: pointer;
+        transition: transform 0.05s ease;
+      }
+      button:active { transform: scale(0.98); }
+      .btn-primary { background: var(--accent); color: #053524; }
+      .btn-secondary { background: #1f2937; color: var(--text); }
+      .btn-danger { background: rgba(248, 113, 113, 0.2); color: var(--err); }
+
+      video {
+        width: 100%;
+        max-height: 36vh;
+        border-radius: 12px;
+        background: #000;
+        object-fit: cover;
+      }
+
+      #log {
+        font-family: ui-monospace, "JetBrains Mono", Menlo, monospace;
+        font-size: 12px;
+        line-height: 1.5;
+        background: #07090d;
+        border-radius: 10px;
+        padding: 10px;
+        height: 22vh;
+        overflow-y: auto;
+        white-space: pre-wrap;
+      }
+      .log-line { color: var(--muted); }
+      .log-line.ok { color: var(--accent); }
+      .log-line.warn { color: var(--warn); }
+      .log-line.err { color: var(--err); }
+
+      .level {
+        height: 6px;
+        background: #0b0d12;
+        border-radius: 999px;
+        overflow: hidden;
+      }
+      .level > span {
+        display: block;
+        height: 100%;
+        width: 0%;
+        background: linear-gradient(90deg, var(--accent), var(--accent-2));
+        transition: width 0.1s linear;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>LiveRecall <small>· phone</small></h1>
+      <span id="status" class="pill">disconnected</span>
+    </header>
+
+    <div class="panel">
+      <label>Backend URL</label>
+      <input id="backend" placeholder="http://localhost:8000" />
+      <div style="height: 8px"></div>
+      <div class="row">
+        <div>
+          <label>Identity</label>
+          <input id="identity" placeholder="kalle-phone" />
+        </div>
+        <div>
+          <label>Room</label>
+          <input id="room" placeholder="liverecall-demo" />
+        </div>
+      </div>
+    </div>
+
+    <video id="preview" autoplay playsinline muted></video>
+
+    <div class="level"><span id="meter"></span></div>
+
+    <div class="row">
+      <button id="connect" class="btn-primary">Connect</button>
+      <button id="disconnect" class="btn-danger" disabled>Leave</button>
+    </div>
+
+    <div class="panel">
+      <label>Log</label>
+      <div id="log"></div>
+    </div>
+
+    <audio id="answer" autoplay playsinline></audio>
+
+    <script src="https://cdn.jsdelivr.net/npm/livekit-client/dist/livekit-client.umd.min.js"></script>
+    <script>
+      const { Room, RoomEvent, Track, createLocalTracks, ConnectionState, DataPacket_Kind } = LivekitClient;
+
+      const $ = (id) => document.getElementById(id);
+      const log = (msg, cls = "") => {
+        const div = document.createElement("div");
+        div.className = "log-line " + cls;
+        const ts = new Date().toLocaleTimeString();
+        div.textContent = `[${ts}] ${msg}`;
+        $("log").prepend(div);
+      };
+
+      const state = { room: null, audioCtx: null, meter: null };
+
+      const setStatus = (text, cls = "") => {
+        const el = $("status");
+        el.textContent = text;
+        el.className = "pill " + cls;
+      };
+
+      const params = new URLSearchParams(location.search);
+      $("backend").value = params.get("backend") || localStorage.getItem("backend") || "http://localhost:8000";
+      $("identity").value = params.get("identity") || localStorage.getItem("identity") || "kalle-phone";
+      $("room").value = params.get("room") || localStorage.getItem("room") || "liverecall-demo";
+
+      async function fetchToken() {
+        const backend = $("backend").value.trim().replace(/\/$/, "");
+        const body = {
+          identity: $("identity").value.trim() || "phone",
+          room: $("room").value.trim() || "liverecall-demo",
+        };
+        const resp = await fetch(`${backend}/token`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        if (!resp.ok) throw new Error(`token: ${resp.status}`);
+        return resp.json();
+      }
+
+      async function connect() {
+        try {
+          $("connect").disabled = true;
+          setStatus("connecting…", "warn");
+          const { token, url } = await fetchToken();
+          log(`got token, url=${url}`, "ok");
+
+          const tracks = await createLocalTracks({
+            audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+            video: { facingMode: "environment", resolution: { width: 640, height: 480 }, frameRate: 24 },
+          });
+
+          const room = new Room({ adaptiveStream: true, dynacast: true });
+          state.room = room;
+
+          room.on(RoomEvent.ConnectionStateChanged, (s) => {
+            log(`connection: ${s}`);
+            if (s === ConnectionState.Connected) setStatus("live", "live");
+            if (s === ConnectionState.Disconnected) setStatus("disconnected", "err");
+          });
+          room.on(RoomEvent.TrackSubscribed, (track, _pub, participant) => {
+            log(`track subscribed: ${track.kind} from ${participant.identity}`, "ok");
+            if (track.kind === Track.Kind.Audio) {
+              const el = $("answer");
+              track.attach(el);
+            }
+          });
+          room.on(RoomEvent.DataReceived, (payload) => {
+            try {
+              const text = new TextDecoder().decode(payload);
+              log(`data: ${text}`);
+            } catch (_) {}
+          });
+
+          await room.connect(url, token);
+          for (const t of tracks) {
+            await room.localParticipant.publishTrack(t);
+            if (t.kind === Track.Kind.Video) {
+              t.attach($("preview"));
+            }
+            if (t.kind === Track.Kind.Audio) {
+              attachMeter(t.mediaStreamTrack);
+            }
+          }
+
+          localStorage.setItem("backend", $("backend").value);
+          localStorage.setItem("identity", $("identity").value);
+          localStorage.setItem("room", $("room").value);
+
+          $("disconnect").disabled = false;
+          log("connected and publishing audio + video", "ok");
+        } catch (e) {
+          log(String(e), "err");
+          setStatus("error", "err");
+          $("connect").disabled = false;
+        }
+      }
+
+      async function disconnect() {
+        if (!state.room) return;
+        await state.room.disconnect();
+        state.room = null;
+        $("disconnect").disabled = true;
+        $("connect").disabled = false;
+        setStatus("disconnected");
+      }
+
+      function attachMeter(mediaStreamTrack) {
+        try {
+          const ctx = new (window.AudioContext || window.webkitAudioContext)();
+          const src = ctx.createMediaStreamSource(new MediaStream([mediaStreamTrack]));
+          const analyser = ctx.createAnalyser();
+          analyser.fftSize = 512;
+          src.connect(analyser);
+          const data = new Uint8Array(analyser.frequencyBinCount);
+          const tick = () => {
+            analyser.getByteTimeDomainData(data);
+            let max = 0;
+            for (const v of data) { const d = Math.abs(v - 128); if (d > max) max = d; }
+            const pct = Math.min(100, (max / 80) * 100);
+            $("meter").style.width = pct + "%";
+            requestAnimationFrame(tick);
+          };
+          tick();
+        } catch (e) { log(`meter: ${e}`, "warn"); }
+      }
+
+      $("connect").onclick = connect;
+      $("disconnect").onclick = disconnect;
+    </script>
+  </body>
+</html>
