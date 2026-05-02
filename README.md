@@ -1,5 +1,15 @@
 # LiveRecall
 
+> **🚧 Current scope (2026-05-02): equipment-only.** The live Atlas DB has
+> been narrowed to the Wikimedia equipment catalog (63 entries in
+> `documents`). DailyMed medications, Synthea patients/events, and MTSamples
+> notes are no longer in Mongo. See [`EQUIPMENT_SCOPE.md`](./EQUIPMENT_SCOPE.md)
+> for what works, what doesn't, how to reproduce, and how to revert to the
+> full multi-source seed.
+>
+> - Reproduce equipment-only state: `make seed-equipment`
+> - Revert to full multi-source: `make seed`
+
 **Clinical decision support grounded in live visual memory.** A clinician
 wears camera glasses (or holds a phone). They look at a pill bottle, a
 patient wristband, a vital-signs monitor — and ask one question. The system
