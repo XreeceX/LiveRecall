@@ -3,24 +3,24 @@ uvicorn[standard]==0.32.0
 python-dotenv==1.0.1
 
 # Mongo
-motor==3.6.0
+motor==3.7.1
 pymongo==4.10.1
 
 # LangChain + agents
 langchain-core==0.3.21
 langchain-openai==0.2.10
-langchain-mongodb==0.3.0
+langchain-mongodb==0.4.0
 langgraph==0.2.50
 openai==1.55.3
 
-# LiveKit
-livekit==0.18.0
-livekit-agents==0.12.5
-livekit-api==0.8.0
-livekit-plugins-deepgram==0.7.0
-livekit-plugins-elevenlabs==0.7.10
-livekit-plugins-openai==0.10.10
-livekit-plugins-silero==0.7.4
+# LiveKit (unpinned — tight inter-package constraints, let pip resolve)
+livekit>=0.18.1
+livekit-agents>=0.12.16,<1.0
+livekit-api>=0.8.0
+livekit-plugins-deepgram>=0.7.0,<1.0
+livekit-plugins-elevenlabs>=0.7.10,<1.0
+livekit-plugins-openai>=0.10.10,<1.0
+livekit-plugins-silero>=0.7.4,<1.0
 
 # STT/TTS direct clients (used outside agents-plugin path too)
 deepgram-sdk==3.7.7
