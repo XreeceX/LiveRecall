@@ -1,18 +1,93 @@
 # LiveRecall: Build Instructions
 
-You are building **LiveRecall**, an adaptive retrieval system grounded in real-time visual memory. Read this whole file before writing code. Do not deviate from the architecture without asking.
+> **Amended 2026-05-02 (a):** STT vendor changed from Deepgram Nova-2 to
+> **ElevenLabs Scribe v2 Realtime** (~150 ms first-token, single-vendor with
+> our TTS). Latency math is unchanged.
+>
+> **Amended 2026-05-02 (b):** Domain pivoted from factory walkthrough to
+> **point-of-care medical vision device** (clinician at the bedside or in
+> clinic). Architecture, latency budget, and Mongo-feature count are
+> unchanged — only the seed data, prompts, and demo scenario change.
+>
+> **Amended 2026-05-02 (c):** New capability: **single-image retrieval**
+> (`POST /snap`). The phone has a "Snap & ask" button that captures one
+> frame, runs Vision synchronously, and fires the rest of the pipeline.
+> Streaming path still works in parallel.
+>
+> **Amended 2026-05-02 (d):** Added **Local Retrieval** (per-session in-process
+> cache, prefetched by Vision when it sees a wristband or pill label —
+> Retrievers serve hits in ~5 ms) and **Active Retrieval** (the Reranker may
+> emit up to 2 targeted follow-up tool calls when it spots an information gap;
+> a tight Pass-2 rerank folds the new facts in). All on **pre-trained models** —
+> the medical domain is canonical enough (USAN drug names, LOINC labs, MRN
+> wristbands) that we don't need to fine-tune anything. End-to-end stays inside
+> the 2 s target on warm cache; bounded ~1.8 s when an active follow-up fires.
+> See `backend/local_cache.py`, `backend/agents/active_tools.py`,
+> `backend/agents/reranker.py`.
+>
+> **Amended 2026-05-02 (e):** Three **real public datasets** now back the
+> three retrievers — **DailyMed** (FDA SPL drug labels, 136 chunks across 10
+> drugs) for `documents`, **Synthea v3.3** (open-source MITRE synthetic FHIR
+> patients, 25 patients + 917 events) for `patients` + `clinical_events`, and
+> **MTSamples** (CC0 medical-transcription corpus, 35 notes across 7
+> specialties) for `transcripts`. Ingest scripts in `scripts/ingest_*.py`
+> emit JSONL fixtures under `data/fixtures/` (committed). `scripts/seed_mongo.py`
+> prefers fixtures, falls back to inline mock when missing, and re-labels the
+> most demo-relevant Synthea patient as `P-204` "Sarah Chen" with two
+> hand-shaped headline events injected on top for demo determinism. See
+> `data/README.md`.
+>
+> **Amended 2026-05-02 (f):** References retriever upgraded to a **multimodal
+> apparatus catalog** — every `documents` row now has shape
+> `(name, context, image)` where `category ∈ {medication, equipment, other}`.
+> DailyMed ingest pulls real FDA product-label photos via `/spls/{setid}/media`
+> (136 medication chunks, 100% with images). New `scripts/ingest_wikimedia_equipment.py`
+> adds ~23 bedside devices (infusion pump, pulse oximeter, defibrillator,
+> insulin pen, …) sourced from Wikipedia summaries + Commons thumbnails
+> (CC-BY-SA). Vision now extracts an `apparatus` list (canonical lowercase
+> names from the catalog vocabulary) so retrieval fires for *unlabelled*
+> equipment too, not just OCR'd drug names. Router can filter by `name` and
+> `category`. Dashboard renders inline thumbnails next to each retrieved
+> snippet so the audience sees the system match the actual physical thing.
+> See `backend/agents/vision.py`, `backend/agents/router.py`,
+> `dashboard/src/components/ReasoningTrace.tsx`.
+>
+> **Amended 2026-05-02 (g):** **Two capture modes** — the same Vision pipeline
+> now ingests scenes from either **Meta Ray-Ban smart glasses** (first-person
+> POV, hands-free, the headline product moment) **or** a plain
+> **phone-browser camera** (universal fallback — every clinician on shift
+> already has one, so the entire clinic adopts on day 1 with no hardware
+> purchase). `shared/types.py` gains `CaptureMode = Literal["glasses",
+> "phone"]` (default `"phone"`); `/token` and `/snap` accept `capture_mode`
+> and the session/scene_context documents persist it. The Vision system
+> prompt gets a tiny POV hint append (`_system_prompt_for(mode)`) so GPT-4o
+> knows whether the frame is first-person or over-the-shoulder; the apparatus
+> extraction from (f) is untouched. New `phone/glasses.html` is the Ray-Ban
+> entry point (currently a first-person stand-in — laptop webcam / phone in
+> head strap — with the documented swap path to a Meta Live AI → LiveKit
+> ingress bridge). The dashboard shows a `GLASSES` (purple/blue) or `PHONE`
+> (slate, "fallback" tooltip) pill near the session header. Latency budget
+> and Mongo-feature count unchanged. See `DECISIONS.md` (g) and (f).
+>
+> Rationales live in `DECISIONS.md`. Everything else here is the source of truth.
+
+You are building **LiveRecall**, an adaptive clinical-context retrieval system grounded in real-time visual memory. Read this whole file before writing code. Do not deviate from the architecture without asking.
 
 ## What we're building
 
-A wearable memory system. Ray-Ban Meta v2 glasses (or phone-as-capture) stream audio + video via LiveKit to a backend. A Vision agent extracts structured `scene_context` from frames. When the user asks a question, a Router agent uses *recent scene context* + the question to construct adaptive queries across multiple sources. Retrievers run hybrid search in parallel. A Reranker reweights results based on what the user just saw. An Answerer speaks the response back through the same LiveKit room.
+A wearable point-of-care assistant for clinicians. Ray-Ban Meta v2 glasses (or phone-as-capture) stream audio + video via LiveKit to a backend. A Vision agent extracts structured `scene_context` from frames — drug names, patient identifiers, devices, environment. When the clinician asks a question, a Router agent uses *recent scene context* + the question to construct adaptive queries across multiple clinical sources. Retrievers run hybrid search in parallel. A Reranker reweights results based on what the clinician just saw (the medication on the cart, the wristband on the patient). An Answerer speaks the response back through the same LiveKit room.
 
-The product is **adaptive retrieval grounded in real-time visual memory**, with **MongoDB Atlas as the substrate** and **LiveKit as the real-time transport**.
+There are two ways in:
+1. **Continuous capture** — glasses or phone stream POV video; the system passively builds scene context as the clinician moves around.
+2. **Single-image snap** — one tap captures one frame, runs Vision synchronously, and the next question is grounded against just that frame. This is the lower-friction interaction for "I'm looking at this pill bottle right now."
+
+The product is **adaptive clinical retrieval grounded in real-time visual memory**, with **MongoDB Atlas as the substrate** and **LiveKit as the real-time transport**.
 
 ## Framing
 
-Pitch as: *"Adaptive retrieval grounded in live visual memory. Multi-source agentic retrieval that reweights results based on what the user just saw."*
+Pitch as: *"Clinical decision support grounded in live visual memory. Multi-source agentic retrieval that reweights results based on what the clinician is looking at right now."*
 
-Never as: "RAG with glasses," "image analyzer," "multimodal RAG."
+Never as: "RAG with glasses," "image analyzer," "multimodal RAG," "AI doctor." This is **decision support**, not diagnosis. The clinician is in the loop.
 
 ## Hard constraints
 
@@ -27,7 +102,7 @@ Never as: "RAG with glasses," "image analyzer," "multimodal RAG."
 | Stage | Budget |
 |---|---|
 | Phone mic → LiveKit ingress | 50-100 ms |
-| Streaming STT (Deepgram) | 200-400 ms |
+| Streaming STT (ElevenLabs Scribe v2 Realtime) | 150-300 ms |
 | Router (GPT-4o-mini) | 300-500 ms |
 | 3 Retrievers in parallel (Mongo) | 200-400 ms |
 | Reranker (GPT-4o-mini, single call) | 300-500 ms |
@@ -36,7 +111,7 @@ Never as: "RAG with glasses," "image analyzer," "multimodal RAG."
 | LiveKit egress → phone playback | 50-100 ms |
 | **Total: end-of-question to first audio byte** | **~1.5-2.5 s** |
 
-**Latency-driven model choices:** GPT-4o-mini everywhere except where quality genuinely matters. Streaming everywhere it's available. Deepgram over Whisper (Whisper is non-streaming, adds 1-2s). Flash TTS over standard.
+**Latency-driven model choices:** GPT-4o-mini everywhere except where quality genuinely matters. Streaming everywhere it's available. ElevenLabs Scribe v2 Realtime over Whisper (Whisper is non-streaming, adds 1-2s; Scribe v2 Realtime delivers ~150ms first-token, comparable to Deepgram Nova-3, with the bonus that it's the same vendor as our TTS). Flash TTS over standard.
 
 ## Team
 
@@ -57,7 +132,7 @@ Four people, 6 hours.
 | Backend | Python (FastAPI + LiveKit Agents SDK) | Single process, agent worker joins LiveKit room |
 | Database | **MongoDB Atlas Sandbox** (M10) | All vector + time series + change streams in one place |
 | Embeddings | OpenAI text-embedding-3-small | 1536-dim, fast, Atlas Vector Search compatible |
-| **STT** | **Deepgram Nova-2 streaming** | Sub-300ms partial transcripts, beats Whisper for latency |
+| **STT** | **ElevenLabs Scribe v2 Realtime** | ~150ms first-token over WebSocket; same vendor as our TTS so one key + one SDK + one rate limit |
 | **TTS** | **ElevenLabs Flash v2.5** | ~150ms first-byte latency, optimized for real-time |
 | Agent framework | **LangChain (langchain-core + langgraph)** | Tool calling, agent loops, streaming, callbacks for tracing |
 | Vision | GPT-4o (vision) | Multimodal native, structured JSON output |
@@ -103,34 +178,58 @@ from langgraph.graph import StateGraph
 ## Architecture
 
 ```
-[Phone browser]
-   |
-   |  WebRTC: audio + video tracks
-   v
+                     ┌──────────── Capture lane (two parallel sources, see (g)) ────────────┐
+                     │                                                                      │
+[Meta Ray-Ban v2 / first-person POV]      OR      [Phone browser / universal fallback]
+        │  (capture_mode="glasses")                       │  (capture_mode="phone")
+        │  phone/glasses.html  → LiveKit publish          │  phone/index.html  → LiveKit publish
+        │                                                  │
+        └──────────────── WebRTC: audio + video tracks ────┘
+                              │
+                              v
 [LiveKit Cloud room "liverecall"]
    |
    v
 [Backend: LiveKit Agents Python worker]
    |
    |  Subscribes to room
-   |  - Audio track  -->  Deepgram streaming STT  -->  transcripts (Mongo)
+   |  - Audio track  -->  Scribe v2 Realtime streaming STT  -->  transcripts (Mongo)
    |  - Video track  -->  Frame sampler (1 fps)   -->  video_frames (Mongo)
    |
    v
 [MongoDB change streams trigger agents]
    |
    |  new video_frame  -->  Vision agent (GPT-4o)  -->  scene_context
+   |                      (objects + APPARATUS list + text_visible + summary)
    |  new transcript   -->  Router (GPT-4o-mini)   -->  retrieval_plan
    |
    v
 [Retriever fan-out via change stream subscriptions]
    |
-   |  Manuals     -->  Mongo $vectorSearch
-   |  Logs        -->  Mongo Time Series + filter
-   |  Transcripts -->  Mongo $vectorSearch + recency
+   |  References  -->  cache check → Mongo $vectorSearch on multimodal catalog
+   |                   (medications + equipment, each row carries name+context+image)
+   |  Events      -->  cache check → Mongo Time Series + patient_id filter
+   |  Notes       -->  Mongo $vectorSearch + recency boost (past handoffs)
+   |
+   |  ↑ Local Retrieval: Vision pre-warms the cache for any patient_id,
+   |    medication name, OR recognised apparatus (e.g. "infusion pump") it
+   |    sees, so by question-time the events + references retrievers usually
+   |    serve in ~5 ms instead of ~150–300 ms Mongo. See backend/local_cache.py.
    |
    v
-[Reranker (GPT-4o-mini): scene_context + retrieval_results --> final_context]
+[Reranker Pass-1 (GPT-4o-mini): scene_context + retrieval_results
+   --> ranked_results + (optional) up to 2 active_followups]
+   |
+   |  ↳ if active_followups requested:
+   |    [Active Retrieval] parallel point queries on Mongo (~30–80 ms each):
+   |      get_latest_lab(patient_id, lab_name)
+   |      get_last_administration(patient_id, medication)
+   |      get_monograph_section(medication, section_keyword)
+   |    --> Reranker Pass-2 folds the new facts in.
+   |    See backend/agents/active_tools.py + backend/agents/reranker.py.
+   |
+   v
+[final_context (with active_followups + rerank_passes)]
    |
    v
 [Answerer (GPT-4o-mini, streaming): final_context --> answer tokens]
@@ -153,11 +252,12 @@ Every state change is a Mongo write. Agents communicate via change streams.
 |---|---|---|---|
 | `sessions` | standard | One per LiveKit room session | Document model |
 | `clips` | GridFS | Raw video chunks (24h TTL) | GridFS + TTL index |
-| `video_frames` | standard | Sampled frames | Change streams |
-| `scene_context` | standard + Vector | Vision output, embeddings | Atlas Vector Search |
-| `transcripts` | standard + Vector | STT output | Atlas Vector Search |
-| `documents` | standard + Vector | Manuals chunked | Atlas Vector Search |
-| `maintenance_events` | **Time Series** | Machine logs | Time Series collection |
+| `video_frames` | standard | Sampled frames (continuous + snap path) | Change streams |
+| `scene_context` | standard + Vector | Vision output (objects, **apparatus**, text_visible, embedding) | Atlas Vector Search |
+| `transcripts` | standard + Vector | Live STT output + past clinical notes (seeded from **MTSamples**) | Atlas Vector Search |
+| `documents` | standard + Vector | **Multimodal apparatus catalog** — `(name, context, image)` rows, `category ∈ {medication, equipment, other}`. Medication rows seeded from **DailyMed FDA SPL** with real product photos; equipment rows seeded from **Wikimedia Commons + Wikipedia** (CC-BY-SA) with device photos. | Atlas Vector Search |
+| `clinical_events` | **Time Series** | Per-patient timeline (vitals, meds, labs, notes) — seeded from **Synthea** | Time Series collection |
+| `patients` | standard | Patient master records — seeded from **Synthea** (1 re-labelled as P-204 for demo) | Document model |
 | `retrieval_plans` | standard | Router output | Change streams |
 | `retrieval_results` | standard | Per-Retriever output | Change streams |
 | `final_context` | standard | Reranker output | Aggregation pipelines |
@@ -183,10 +283,10 @@ class SceneContext:
     session_id: str
     timestamp: int  # unix ms
     source_frame_id: str
-    objects: list[str]              # ["conveyor belt", "pressure gauge"]
-    text_visible: list[str]         # ["C-204", "PSI 47"]
-    environment: str                # "factory_floor"
-    activity: str                   # "running"
+    objects: list[str]              # ["pill bottle", "wristband", "IV pump"]
+    text_visible: list[str]         # ["METFORMIN 500 mg", "P-204", "eGFR 38"]
+    environment: str                # "hospital_room" | "clinic" | "pharmacy" | ...
+    activity: str                   # "reviewing medication"
     text_embedding: list[float]     # 1536-dim
 
 class RetrievalPlan:
@@ -218,7 +318,8 @@ class Answer:
 
 ### Backend endpoints (REST + LiveKit room events)
 
-- LiveKit room `liverecall-{session_id}` is the primary interface (no REST for capture)
+- LiveKit room `liverecall-{session_id}` is the primary streaming interface
+- `POST /snap` → `{session_id, image_b64, question?}` → runs Vision sync, optionally creates a `questions` doc. Used by the phone "Snap & ask" button and by the dashboard's image-upload tester.
 - `GET /scene-context/recent?seconds=30` → JSON for dashboard
 - `GET /trace/:question_id` → full reasoning chain for dashboard
 - `WS /stream` → dashboard subscribes, change stream events fan out
@@ -230,9 +331,9 @@ class Answer:
 1. Lock `shared/types.py`, push public GitHub.
 2. **Atlas Sandbox cluster** from the provided link (NOT a personal Atlas).
 3. **LiveKit Cloud project** spun up, API key + URL in shared `.env`.
-4. **Deepgram + ElevenLabs API keys** in `.env`. (Apply for ElevenLabs Creator tier early if not already.)
+4. **ElevenLabs API key** in `.env` — one key powers both Scribe v2 Realtime STT *and* Flash v2.5 TTS. (Apply for ElevenLabs Creator tier early if not already.)
 5. OpenAI API key in `.env`.
-6. Decide demo scenario: factory walkthrough.
+6. Decide demo scenario: bedside medication safety check (clinician + pill bottle + patient wristband).
 7. **Confirm at least one teammate available May 7 for follow-up event.** If not, replan team commitment.
 
 ### Hours 1-6: parallel streams
@@ -248,32 +349,40 @@ See TEAM_SPLIT.md for hourly task lists. Sync points at +1, +2.5, +4, +5, +5.5 h
 
 ## Demo scenario
 
-**Pre-recorded factory clips** (Kazybek, by hour 1):
-1. Conveyor belt with visible "C-204" label
-2. Pressure gauge reading ~47 PSI
-3. Wide factory floor with 3 machines
-4. Worn belt close-up
-5. Control panel display
+**Pre-recorded clinical clips** (Kazybek, by hour 1) — staged on a desk with mock-up assets, no real PHI:
+1. Pill bottle close-up: label clearly readable as "METFORMIN 500 mg"
+2. Patient wristband: visible MRN "P-204"
+3. Wider shot of a med cart with the bottle + bedside table
+4. Close-up of a vital-signs monitor mock-up showing eGFR / creatinine
+5. A second pill bottle in the background ("LISINOPRIL 10 mg") for the multi-drug variant
 
 **Seed Mongo** (Stream C, by hour 2):
-- 5 machines (C-201..C-205)
-- 50 maintenance events over 6 months (Time Series collection)
-- 3 manuals chunked + embedded (~30 chunks)
-- 5 past inspection transcripts
+- 5 patients (P-201..P-205) with allergies + active conditions; **P-204 has chronic kidney disease and a recent eGFR=38 lab**
+- 50 clinical events over 6 months in the Time Series collection (vitals, medication administrations, lab results, free-text notes); biased so P-204's most recent metformin admin is **47 hours ago**
+- 3 reference documents chunked + embedded (~30 chunks): metformin monograph (dosing, interactions, **renal contraindications**), insulin sliding-scale protocol, generic medication-safety "5 rights" protocol
+- 5 past clinical handoff notes / dictations (used for the History/Notes retriever)
 
-**Demo question**: *"What's the failure rate on this conveyor and when was it last serviced?"*
-**Expected answer**: System sees C-204 + 47 PSI gauge, returns: 3% expected failure rate from spec + last service 47 days ago + gauge reading is mid-range normal. Reranker boosts gauge-related result via visual signal.
+**Demo question**: *"Is it safe to give this dose now? When did they last receive it?"*
+
+**Expected answer**: System sees `METFORMIN 500 mg` + `P-204` in scene. Router queries: drug references for metformin, time-series events filtered by `patient_id=P-204`, past notes about P-204. Reranker boosts the renal-contraindication chunk because the patient's recent `eGFR 38` event is also in context. Answerer says something like:
+
+> *"Hold this dose — P-204's most recent eGFR is 38, which is below the 45 threshold for metformin. Last administration was 47 hours ago. Recommend rechecking renal function before giving."*
+
+This is the headline rubric moment: the visual signal (the pill bottle on the cart + the wristband) **reweights** the answer — without seeing them, the system would just regurgitate the monograph.
 
 ## Demo script (3 min live)
 
-1. (0:00-0:20) "Adaptive retrieval grounded in live visual memory. Walk through any space, agents adapt retrieval to what you've just been looking at."
-2. (0:20-0:40) Phone in hand pointed at pre-recorded factory clip. LiveKit room is live. Dashboard shows clips streaming, Vision agent firing, scene_context populating.
-3. (0:40-1:00) Speak question into phone: "What's the failure rate on this conveyor and when was it last serviced?"
-4. (1:00-1:30) Dashboard: Router reads recent scene_context + question, fans out to 3 Retrievers in parallel. Aggregation pipelines visible.
-5. (1:30-2:00) Reranker reweights using visual signal. Boost reasons shown.
-6. (2:00-2:20) ElevenLabs voice plays answer through phone speaker (or Ray-Bans BT if paired).
-7. (2:20-2:50) Show "Mongo features used" sidebar, all 8 highlighted. Walk through architecture.
-8. (2:50-3:00) "Adaptive retrieval. Live visual memory. MongoDB and LiveKit as the brain and the bloodstream."
+1. (0:00-0:20) "Clinical decision support grounded in live visual memory. The clinician looks at what they're about to act on, and the system adapts retrieval to it."
+2. (0:20-0:40) Phone in hand pointed at the pill bottle / wristband clip. LiveKit room is live. Dashboard shows frames streaming, Vision agent firing, `scene_context` populating with `METFORMIN 500 mg` and `P-204`.
+3. (0:40-0:55) Speak question into phone: *"Is it safe to give this dose now?"*
+4. (0:55-1:25) Dashboard: Router reads recent `scene_context` + question, fans out to 3 Retrievers in parallel — references, time-series events, past notes. Aggregation pipelines visible.
+5. (1:25-1:55) Reranker reweights using visual signal. `boost_reason` cites the visible drug name and the patient's eGFR.
+6. (1:55-2:15) ElevenLabs voice plays the cautionary answer through the phone speaker.
+7. (2:15-2:35) **Single-image variant**: tap *"Snap & ask"* on the phone, frame the second bottle (Lisinopril), say *"any interaction?"* — show that one image is enough.
+8. (2:35-2:50) Show the "Mongo features used" sidebar — all 8 highlighted — and the latency monitor under 2.5s.
+9. (2:50-3:00) "Adaptive clinical retrieval. Live visual memory. MongoDB and LiveKit as the brain and the bloodstream."
+
+**Compliance note for the pitch:** this is **decision support**, not a diagnosis or a prescription. The clinician acts on the recommendation; the system never auto-administers anything. Use that language verbatim if a judge asks about safety/regulation.
 
 ## Conventions
 
@@ -285,12 +394,13 @@ See TEAM_SPLIT.md for hourly task lists. Sync points at +1, +2.5, +4, +5, +5.5 h
 
 ## Don'ts
 
-- Do NOT pitch as "RAG" or "image analyzer."
+- Do NOT pitch as "RAG", "image analyzer", "AI doctor", or "diagnosis." This is **clinical decision support**.
+- Do NOT use real PHI in seeds, logs, or screenshots. Mock patients only (P-201..P-205).
 - Do NOT use Streamlit.
 - Do NOT use a personal Atlas account. Use the sandbox link.
 - Do NOT use Pinecone, Redis, or Kafka. Mongo only.
 - Do NOT use GPT-4o for Router, Reranker, or Answerer. Mini only. Latency budget doesn't allow it.
-- Do NOT use Whisper. Deepgram streaming only.
+- Do NOT use Whisper or any non-streaming STT. ElevenLabs Scribe v2 Realtime over WebSocket only.
 - Do NOT use ElevenLabs Multilingual or Turbo for the live demo. Flash v2.5 only.
 - Do NOT skip change streams. Agent message bus.
 - Do NOT let any agent loop forever. Max 3 tool-call iterations (latency budget).
@@ -298,16 +408,18 @@ See TEAM_SPLIT.md for hourly task lists. Sync points at +1, +2.5, +4, +5, +5.5 h
 ## Definition of done
 
 - [ ] Phone joins LiveKit room, publishes audio + video
-- [ ] Backend agent worker subscribes, runs Deepgram STT and frame sampling
-- [ ] Vision agent (GPT-4o) writes scene_context with embeddings
-- [ ] Router (GPT-4o-mini) reads question + scene, writes retrieval_plan
-- [ ] 3 Retrievers run hybrid Mongo aggregation in parallel
-- [ ] Reranker (GPT-4o-mini) reweights using visual signal, boost reasons logged
-- [ ] Answerer (GPT-4o-mini, streaming) generates response token-by-token
+- [ ] Phone "Snap & ask" button captures a single frame and POSTs to `/snap`
+- [ ] Backend agent worker subscribes, runs Scribe v2 Realtime STT and frame sampling
+- [ ] `POST /snap` runs Vision synchronously and (optionally) creates a `questions` doc
+- [ ] Vision agent (GPT-4o) writes scene_context with embeddings (drug names, MRNs, vitals)
+- [ ] Router (GPT-4o-mini) reads question + scene, writes retrieval_plan with `patient_id` filter when wristband visible
+- [ ] 3 Retrievers run hybrid Mongo aggregation in parallel (references, events, notes)
+- [ ] Reranker (GPT-4o-mini) reweights using visual signal, boost reasons cite visible drug + MRN when present
+- [ ] Answerer (GPT-4o-mini, streaming) generates response token-by-token; uses cautious "decision support" tone
 - [ ] ElevenLabs Flash v2.5 streams TTS audio chunks
 - [ ] LiveKit publishes audio back to room, phone plays through speaker
 - [ ] Dashboard shows live pipeline + Mongo features highlighted + reasoning trace
-- [ ] End-to-end latency ≤2.5s in testing (target ≤2s)
+- [ ] End-to-end latency ≤2.5s on streaming path; snap path ≤3.5s (Vision is in the critical path)
 - [ ] At least 8 Mongo features demonstrably load-bearing
 - [ ] LiveKit visibly handling real-time transport
 - [ ] Public GitHub repo with README

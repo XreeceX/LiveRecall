@@ -1,11 +1,17 @@
-"""Reranker agent — GPT-4o-mini.
+"""Reranker agent — GPT-4o-mini, with optional Active Retrieval pass.
 
-Waits until all 3 retrieval_results land for a plan. Single LLM call: read
-scene_context + every result, return ranked list with `boost_reason` per item.
+Pass 1 (always):
+  Reads scene_context + every retrieval_results bundle, ranks the top results,
+  AND may emit up to 2 `active_followups` if it spots an information gap that
+  matters clinically (e.g. has a renal-contraindication monograph chunk but no
+  recent eGFR in the events list).
 
-This is where the "reorder results based on what the user just saw" theme is
-visible to judges. Always include at least one boost_reason that mentions a
-concrete object or visible-text token from the recent scene.
+Active Retrieval (sometimes):
+  If the Reranker requested follow-ups, we execute them in parallel via
+  backend/agents/active_tools.py (~30–80 ms each) and run Pass 2 — a tight
+  second rerank that folds the new facts in.
+
+Hard cap: one round of follow-ups, max 2 tools. Keeps latency bounded.
 """
 
 from __future__ import annotations
@@ -20,17 +26,26 @@ from langchain_openai import ChatOpenAI
 
 from ..config import settings
 from ..mongo import collection, watch
-from ..tracing import MongoTraceCallback
+from ..tracing import MongoTraceCallback, trace_event
 from ..util import new_id, now_ms
+from . import active_tools
 
 log = logging.getLogger("reranker")
 
 EXPECTED_SOURCES = 3
+MAX_FOLLOWUPS = 2
 
-SYSTEM = """You rerank retrieval results for an adaptive retrieval system.
-The user wears camera glasses; recent scene context is provided. Reorder the
-results to favor anything that connects to what the user just SAW
-(objects, visible text, environment).
+SYSTEM = """You rerank retrieval results for an adaptive clinical decision-support
+system. The user is a clinician wearing camera glasses or holding a phone;
+recent scene context is provided (drug names visible, MRNs visible, vitals on
+monitors). Reorder the results to favor anything that connects to what the
+clinician just SAW.
+
+You may also request up to 2 short follow-up tool calls when there is a
+concrete, clinically meaningful information gap in the candidate results
+(e.g. you have a renal-contraindication chunk for metformin but no recent
+eGFR in the events). Skip follow-ups whenever the existing candidates
+already answer the question well — a clean Pass-1 is the fast path.
 
 Return STRICT JSON only:
 {
@@ -38,38 +53,68 @@ Return STRICT JSON only:
     {
       "document_id": "...",
       "snippet": "shortened to <= 220 chars",
-      "source": "manuals|logs|history",
+      "source": "references|events|notes",
       "boosted_score": 0.0-1.0,
-      "boost_reason": "explicit reference to a scene object or visible token, or 'baseline relevance'"
+      "boost_reason": "explicit reference to a scene object, drug name, MRN, or lab value — or 'baseline relevance'"
+    }
+  ],
+  "active_followups": [
+    {
+      "tool": "get_latest_lab" | "get_last_administration" | "get_monograph_section",
+      "args": { ... },                  // see tool schema below
+      "reason": "why this gap matters for the clinician's question"
     }
   ]
 }
 
+Tool schemas (use these exact arg names):
+  get_latest_lab:           { "patient_id": "P-204", "lab_name": "eGFR" }
+  get_last_administration:  { "patient_id": "P-204", "medication": "metformin" }
+  get_monograph_section:    { "medication": "metformin", "section_keyword": "contraindications" }
+
 Rules:
-- Return at most 5 results.
-- At least one boost_reason MUST cite a concrete scene object or visible_text token if any are present.
+- Return at most 5 ranked_results.
+- "active_followups" must be [] if Pass-1 candidates already cover the gap.
+- At least one boost_reason MUST cite a concrete scene object, drug name, MRN,
+  or visible lab value if any are present in the scene.
+- Prefer the most clinically actionable item near the top.
 - Do not invent facts; only rank what was given.
 """
 
+REPASS_SYSTEM = """You are doing PASS 2 of reranking. New facts have arrived from
+targeted follow-up tool calls. Re-emit the ranked_results JSON ONLY (no
+active_followups this turn — Pass-2 has no further follow-ups).
 
-def _llm() -> ChatOpenAI:
+Same shape as before:
+{
+  "ranked_results": [
+    { "document_id", "snippet", "source", "boosted_score", "boost_reason" }
+  ]
+}
+
+Rules:
+- Treat each follow-up result as a high-confidence fact about the patient or
+  the medication. If a follow-up directly answers a missing piece (e.g. the
+  eGFR value), include it near the top with a boost_reason that names the
+  follow-up tool.
+- Keep the same 5-item cap.
+"""
+
+
+def _llm(*, max_tokens: int = 700) -> ChatOpenAI:
     return ChatOpenAI(
         model="gpt-4o-mini",
         temperature=0,
-        max_tokens=550,
+        max_tokens=max_tokens,
         api_key=settings.openai_api_key,
         timeout=5,
     )
 
 
 async def _wait_for_all_results(plan_id: str, timeout_s: float = 4.0) -> list[dict[str, Any]]:
-    """Poll retrieval_results for the plan; return as soon as 3 are present."""
     deadline = asyncio.get_event_loop().time() + timeout_s
     while True:
-        docs = [
-            d
-            async for d in collection("retrieval_results").find({"plan_id": plan_id})
-        ]
+        docs = [d async for d in collection("retrieval_results").find({"plan_id": plan_id})]
         if len(docs) >= EXPECTED_SOURCES:
             return docs
         if asyncio.get_event_loop().time() >= deadline:
@@ -96,6 +141,75 @@ async def _scene_blob(plan: dict[str, Any]) -> str:
     return " ; ".join(parts)
 
 
+def _parse(raw: str) -> dict[str, Any]:
+    raw = (raw or "").strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+
+
+def _validate_followups(raw_followups: Any) -> list[dict[str, Any]]:
+    if not isinstance(raw_followups, list):
+        return []
+    out: list[dict[str, Any]] = []
+    for item in raw_followups:
+        if not isinstance(item, dict):
+            continue
+        tool = item.get("tool")
+        if tool not in active_tools.ALLOWED_TOOLS:
+            continue
+        out.append({
+            "tool": tool,
+            "args": item.get("args") or {},
+            "reason": item.get("reason") or "",
+        })
+        if len(out) >= MAX_FOLLOWUPS:
+            break
+    return out
+
+
+async def _execute_followups(
+    followups: list[dict[str, Any]],
+    *,
+    qid: str,
+    session_id: str | None,
+) -> list[dict[str, Any]]:
+    async def _one(f: dict[str, Any]) -> dict[str, Any]:
+        result = await active_tools.execute(f["tool"], f["args"])
+        await trace_event(
+            agent=f"active:{f['tool']}",
+            stage="end",
+            question_id=qid,
+            session_id=session_id,
+            latency_ms=result.get("latency_ms", 0),
+            payload={
+                "args": f["args"],
+                "reason": f["reason"],
+                "snippet": result.get("snippet"),
+                "found": (result.get("metadata") or {}).get("found"),
+            },
+        )
+        return {
+            "tool": f["tool"],
+            "args": f["args"],
+            "reason": f["reason"],
+            "snippet": result.get("snippet", ""),
+            "metadata": result.get("metadata") or {},
+            "latency_ms": result.get("latency_ms", 0),
+        }
+    return await asyncio.gather(*[_one(f) for f in followups])
+
+
+def _ranked_with_metadata(ranked: list[dict[str, Any]], by_id: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+    out = []
+    for r in ranked:
+        base = by_id.get(r.get("document_id"), {})
+        meta = dict(base.get("metadata") or {})
+        out.append({**r, "metadata": meta})
+    return out[:5]
+
+
 async def rerank(plan: dict[str, Any]) -> dict[str, Any]:
     qid = plan["question_id"]
     session_id = plan.get("session_id")
@@ -112,23 +226,26 @@ async def rerank(plan: dict[str, Any]) -> dict[str, Any]:
                 "score": item.get("score"),
                 "metadata": item.get("metadata", {}),
             })
+    by_id = {b["document_id"]: b for b in bundle}
 
     scene = await _scene_blob(plan)
-    prompt = (
+
+    # ---- Pass 1 -----------------------------------------------------------
+    pass1_prompt = (
         f"Question: {plan['question_text']}\n\n"
         f"Recent scene: {scene}\n\n"
         f"Candidate results:\n{json.dumps(bundle, ensure_ascii=False, default=str)}"
     )
-    resp = await _llm().ainvoke(
-        [SystemMessage(content=SYSTEM), HumanMessage(content=prompt)],
+    pass1_resp = await _llm().ainvoke(
+        [SystemMessage(content=SYSTEM), HumanMessage(content=pass1_prompt)],
         config={"callbacks": [cb]},
     )
-    raw = (resp.content or "").strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
-    try:
-        parsed = json.loads(raw)
-        ranked = parsed.get("ranked_results") or []
-    except json.JSONDecodeError:
-        log.warning("reranker json parse failed; using raw order")
+    parsed = _parse(pass1_resp.content or "")
+    ranked = parsed.get("ranked_results") or []
+    followups_req = _validate_followups(parsed.get("active_followups"))
+
+    if not ranked:
+        log.warning("reranker pass-1 json missing; using raw order")
         ranked = [
             {
                 "document_id": b["document_id"],
@@ -140,16 +257,57 @@ async def rerank(plan: dict[str, Any]) -> dict[str, Any]:
             for b in bundle[:5]
         ]
 
-    # Attach metadata back from the original bundle.
-    by_id = {b["document_id"]: b for b in bundle}
-    for r in ranked:
-        r["metadata"] = by_id.get(r.get("document_id"), {}).get("metadata", {})
+    rerank_passes = 1
+    followup_results: list[dict[str, Any]] = []
+
+    # ---- Active Retrieval (Pass 2) ----------------------------------------
+    if followups_req:
+        await trace_event(
+            agent="reranker",
+            stage="active_followups_requested",
+            question_id=qid,
+            session_id=session_id,
+            payload={"followups": followups_req},
+        )
+        followup_results = await _execute_followups(followups_req, qid=qid, session_id=session_id)
+
+        # Inject as synthetic "active:" candidates so Pass-2 can rank them.
+        active_bundle = []
+        for fr in followup_results:
+            doc_id = f"active:{fr['tool']}:{json.dumps(fr['args'], sort_keys=True)}"
+            active_bundle.append({
+                "document_id": doc_id,
+                "source": "events" if fr["tool"] != "get_monograph_section" else "references",
+                "snippet": _trim(fr["snippet"]),
+                "score": 0.95,
+                "metadata": {**(fr["metadata"] or {}), "from_active_followup": True, "tool": fr["tool"]},
+            })
+            by_id[doc_id] = active_bundle[-1]
+
+        repass_prompt = (
+            f"Question: {plan['question_text']}\n\n"
+            f"Recent scene: {scene}\n\n"
+            f"Pass-1 candidates:\n{json.dumps(bundle, ensure_ascii=False, default=str)}\n\n"
+            f"Follow-up facts from tool calls:\n"
+            f"{json.dumps(active_bundle, ensure_ascii=False, default=str)}"
+        )
+        pass2_resp = await _llm(max_tokens=550).ainvoke(
+            [SystemMessage(content=REPASS_SYSTEM), HumanMessage(content=repass_prompt)],
+            config={"callbacks": [cb]},
+        )
+        parsed2 = _parse(pass2_resp.content or "")
+        ranked2 = parsed2.get("ranked_results") or []
+        if ranked2:
+            ranked = ranked2
+            rerank_passes = 2
 
     final = {
         "_id": new_id("fc"),
         "question_id": qid,
         "session_id": session_id,
-        "ranked_results": ranked[:5],
+        "ranked_results": _ranked_with_metadata(ranked, by_id),
+        "active_followups": followup_results,
+        "rerank_passes": rerank_passes,
         "created_at": now_ms(),
     }
     await collection("final_context").insert_one(final)
@@ -157,7 +315,6 @@ async def rerank(plan: dict[str, Any]) -> dict[str, Any]:
 
 
 async def run_reranker_loop() -> None:
-    """Trigger on each new retrieval_plan; rerank once results arrive."""
     log.info("reranker loop watching retrieval_plans change stream")
     async for change in watch("retrieval_plans"):
         if change.get("operationType") != "insert":

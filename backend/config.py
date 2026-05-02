@@ -25,7 +25,6 @@ class Settings:
     mongodb_uri: str
     mongodb_db: str
     openai_api_key: str
-    deepgram_api_key: str
     elevenlabs_api_key: str
     elevenlabs_voice_id: str
     backend_host: str
@@ -53,7 +52,6 @@ def load_settings() -> Settings:
         mongodb_uri=_env("MONGODB_URI"),
         mongodb_db=_env("MONGODB_DB", "liverecall"),
         openai_api_key=_env("OPENAI_API_KEY"),
-        deepgram_api_key=_env("DEEPGRAM_API_KEY"),
         elevenlabs_api_key=_env("ELEVENLABS_API_KEY"),
         elevenlabs_voice_id=_env("ELEVENLABS_VOICE_ID", "21m00Tcm4TlvDq8ikWAM"),
         backend_host=_env("BACKEND_HOST", "0.0.0.0"),

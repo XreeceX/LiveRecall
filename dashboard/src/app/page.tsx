@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { CaptureModePill } from "../components/CaptureModePill";
 import { LatencyMonitor } from "../components/LatencyMonitor";
 import { MongoFeatures } from "../components/MongoFeatures";
 import { Pipeline } from "../components/Pipeline";
@@ -10,7 +11,7 @@ import { ask, STREAM_URL } from "../lib/api";
 import { useStream } from "../lib/useStream";
 
 const DEMO_QUESTION =
-  "What's the failure rate on this conveyor and when was it last serviced?";
+  "Is it safe to give this dose now? When did they last receive it?";
 
 export default function DashboardPage() {
   const { events, status } = useStream(STREAM_URL);
@@ -42,10 +43,14 @@ export default function DashboardPage() {
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">LiveRecall</h1>
           <p className="text-sm text-slate-400">
-            Adaptive retrieval grounded in live visual memory · MongoDB Atlas + LiveKit
+            Clinical decision support grounded in live visual memory · MongoDB Atlas + LiveKit
           </p>
         </div>
         <div className="flex items-center gap-3">
+          {/* Capture-mode pill: GLASSES (Ray-Ban POV, headline) vs PHONE
+              (universal fallback). Reflects whatever Vision stamped on the
+              most recent scene_context. See DECISIONS.md (g). */}
+          <CaptureModePill events={events} />
           <span
             className={
               "text-[11px] uppercase tracking-widest px-2 py-1 rounded-full " +

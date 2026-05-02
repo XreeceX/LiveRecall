@@ -34,6 +34,26 @@ export function ScenePanel({ events }: { events: ChangeStreamEvent[] }) {
         {latestScene ? (
           <div className="space-y-2 text-sm">
             <div>
+              <div className="text-slate-500 text-[11px] uppercase">
+                apparatus (catalog match)
+              </div>
+              <div className="flex flex-wrap gap-1">
+                {(latestScene.apparatus || []).length ? (
+                  (latestScene.apparatus || []).map((a: string, i: number) => (
+                    <span
+                      key={i}
+                      className="rounded bg-sky-500/20 px-1.5 py-[1px] text-[11px] text-sky-300"
+                      title="Recognised apparatus name — drives References cache prefetch"
+                    >
+                      {a}
+                    </span>
+                  ))
+                ) : (
+                  <span className="text-slate-500">—</span>
+                )}
+              </div>
+            </div>
+            <div>
               <div className="text-slate-500 text-[11px] uppercase">objects</div>
               <div>{(latestScene.objects || []).join(" · ") || "—"}</div>
             </div>

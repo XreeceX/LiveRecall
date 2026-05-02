@@ -45,7 +45,7 @@ async def embed_batch(texts: list[str]) -> list[list[float]]:
 
 
 # Tiny in-process cache for repeat queries (Vision summaries vs Router questions
-# often overlap, e.g. "C-204"). Bounded by lru_cache.
+# often overlap, e.g. "P-204" or "metformin"). Bounded by lru_cache.
 @lru_cache(maxsize=1024)
 def _embed_cache_key(text: str) -> str:
     return text
