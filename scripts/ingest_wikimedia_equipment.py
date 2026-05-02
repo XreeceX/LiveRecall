@@ -1,19 +1,18 @@
 """Ingest Wikimedia / Wikipedia medical-equipment catalog into a JSONL fixture.
 
-For each apparatus name in EQUIPMENT_LIST we hit Wikipedia's REST summary
-endpoint:
+For each apparatus name we hit Wikipedia's REST summary endpoint:
 
   https://en.wikipedia.org/api/rest_v1/page/summary/{title}
 
-Returns the article extract (intro paragraph) and a thumbnail/originalimage
-URL. We download the original image, downscale to ~256 px JPEG via Pillow,
-base64-encode it, and emit one JSONL record per item:
+Returns the article extract and a thumbnail URL.  We download the image,
+downscale to ~256 px JPEG via Pillow, base64-encode it, and emit one JSONL
+record per item:
 
   { name, category="equipment", text, source_doc, image_b64, image_mime,
     image_attribution, image_source_url, _provenance }
 
 Wikipedia text is CC-BY-SA 4.0; Commons images vary (often CC-BY-SA 4.0 or
-PD). We carry attribution in the record so the dashboard can show it.
+PD). Attribution is carried in each record so the dashboard can show it.
 
 Run:
     python -m scripts.ingest_wikimedia_equipment
@@ -34,51 +33,170 @@ from pathlib import Path
 log = logging.getLogger("ingest.wikimedia")
 
 WP_BASE = "https://en.wikipedia.org/api/rest_v1/page/summary"
+WP_API  = "https://en.wikipedia.org/w/api.php"
 HEADERS = {"User-Agent": "LiveRecall-hackathon/1.0 (educational; contact: hackathon-team)"}
 
-OUT_PATH = Path("data/fixtures/wikimedia_equipment_sample.jsonl")
+OUT_PATH  = Path("data/fixtures/wikimedia_equipment_sample.jsonl")
 CACHE_DIR = Path("data/cache/wikimedia")
-IMAGE_MAX_PX = 256
+IMAGE_MAX_PX       = 256
 IMAGE_JPEG_QUALITY = 75
-HTTP_TIMEOUT = 30.0
+HTTP_TIMEOUT       = 30.0
 
-# Curated bedside / clinical apparatus the Vision agent is most likely to
-# encounter. Each entry is (page_title, friendly_name). We use the friendly
-# name as `name` because Wikipedia titles can be over-specific
-# (e.g. "Sphygmomanometer" → "blood pressure cuff").
+# ---------------------------------------------------------------------------
+# Curated list — (Wikipedia_page_title, friendly_name)
+# Covers airway, cardiac, vascular, monitoring, infusion, mobility, surgical,
+# respiratory, renal, neuro, lab, and misc bedside equipment.
+# Duplicates removed; friendly names lowercase.
+# ---------------------------------------------------------------------------
 EQUIPMENT_LIST: list[tuple[str, str]] = [
-    ("Infusion_pump", "infusion pump"),
+    # --- Airway & respiratory -------------------------------------------------
+    ("Tracheal_tube", "endotracheal tube"),
+    ("Laryngeal_mask_airway", "laryngeal mask airway"),
+    ("Laryngoscope", "laryngoscope"),
+    ("Laryngeal_tube", "laryngeal tube"),
+    ("Bag_valve_mask", "bag valve mask"),
+    ("Medical_ventilator", "mechanical ventilator"),
+    ("Nebulizer", "nebulizer"),
+    ("Incentive_spirometer", "incentive spirometer"),
+    ("Nasal_cannula", "nasal cannula"),
+    ("Medical_oxygen_mask", "oxygen mask"),
+    ("Non-rebreather_mask", "non-rebreather mask"),
+    ("Oxygen_concentrator", "oxygen concentrator"),
+    ("Portable_oxygen_concentrator", "portable oxygen concentrator"),
+    ("Tracheotomy_tube", "tracheostomy tube"),
+    ("Suction_(medicine)", "suction machine"),
+    ("Peak_flow_meter", "peak flow meter"),
+    ("Capnography", "capnography monitor"),
+    ("High-flow_nasal_cannula", "high-flow nasal cannula"),
+
+    # --- Cardiac & vascular ---------------------------------------------------
+    ("Defibrillation", "defibrillator"),
+    ("Automated_external_defibrillator", "AED"),
+    ("Pacemaker", "pacemaker"),
+    ("Implantable_cardioverter-defibrillator", "ICD"),
+    ("Ventricular_assist_device", "ventricular assist device"),
+    ("Extracorporeal_membrane_oxygenation", "ECMO machine"),
+    ("Cardiopulmonary_bypass", "heart-lung bypass machine"),
+    ("Arterial_line", "arterial line"),
+    ("Central_venous_catheter", "central venous catheter"),
+    ("Pulmonary_artery_catheter", "pulmonary artery catheter"),
+    ("Peripherally_inserted_central_catheter", "PICC line"),
+    ("Coronary_stent", "coronary stent"),
+    ("Intra-aortic_balloon_pump", "intra-aortic balloon pump"),
+
+    # --- Monitoring -----------------------------------------------------------
     ("Patient_monitor", "vital signs monitor"),
     ("Pulse_oximetry", "pulse oximeter"),
     ("Sphygmomanometer", "blood pressure cuff"),
-    ("Stethoscope", "stethoscope"),
+    ("Electrocardiography", "ecg machine"),
+    ("Electroencephalography", "eeg machine"),
+    ("Bispectral_index", "BIS monitor"),
+    ("Continuous_glucose_monitor", "continuous glucose monitor"),
     ("Glucose_meter", "glucose meter"),
-    ("Defibrillation", "defibrillator"),
-    ("Medical_ventilator", "mechanical ventilator"),
-    ("IV_pole", "iv pole"),
+    ("Medical_thermometer", "thermometer"),
+    ("Impedance_cardiography", "impedance cardiograph"),
+
+    # --- Infusion & vascular access -------------------------------------------
+    ("Infusion_pump", "infusion pump"),
+    ("Syringe_driver", "syringe driver"),
     ("Syringe", "syringe"),
+    ("Hypodermic_needle", "hypodermic needle"),
+    ("Cannula", "cannula"),
+    ("Butterfly_needle", "butterfly needle"),
+    ("IV_pole", "iv pole"),
     ("Insulin_pen", "insulin pen"),
     ("Insulin_pump", "insulin pump"),
-    ("Hospital_bed", "hospital bed"),
-    ("Wheelchair", "wheelchair"),
-    ("Crash_cart", "crash cart"),
-    ("Otoscope", "otoscope"),
-    ("Medical_thermometer", "thermometer"),
+    ("Port_(medical)", "implanted port"),
+    ("Hickman_line", "Hickman line"),
+
+    # --- Urological & drainage ------------------------------------------------
     ("Urinary_catheterization", "urinary catheter"),
-    ("Tracheal_tube", "endotracheal tube"),
-    ("Bag_valve_mask", "bag valve mask"),
-    ("Electrocardiography", "ecg machine"),
+    ("Foley_catheter", "Foley catheter"),
+    ("Chest_tube", "chest tube"),
+    ("Nasogastric_intubation", "nasogastric tube"),
+    ("Feeding_tube", "feeding tube"),
+    ("Jackson-Pratt_drain", "Jackson-Pratt drain"),
+
+    # --- Dialysis & renal -----------------------------------------------------
+    ("Hemodialysis", "hemodialysis machine"),
+    ("Peritoneal_dialysis", "peritoneal dialysis system"),
+
+    # --- Diagnostic instruments -----------------------------------------------
+    ("Stethoscope", "stethoscope"),
+    ("Otoscope", "otoscope"),
+    ("Ophthalmoscope", "ophthalmoscope"),
+    ("Reflex_hammer", "reflex hammer"),
+    ("Speculum", "speculum"),
+    ("Endoscope", "endoscope"),
     ("Medical_ultrasound", "ultrasound probe"),
-    ("Suction_(medicine)", "suction machine"),
-    ("Nasal_cannula", "nasal cannula"),
+    ("Plethysmograph", "plethysmograph"),
+
+    # --- Imaging (bedside) ----------------------------------------------------
+    ("Portable_X-ray", "portable x-ray machine"),
+    ("Point-of-care_ultrasound", "point-of-care ultrasound"),
+
+    # --- Lab (bedside) --------------------------------------------------------
+    ("Blood_gas_analyzer", "blood gas analyzer"),
+    ("I-STAT", "iStat analyser"),
+
+    # --- Surgical instruments -------------------------------------------------
+    ("Scalpel", "scalpel"),
+    ("Forceps", "forceps"),
+    ("Retractor_(medical)", "surgical retractor"),
+    ("Trocar", "trocar"),
+    ("Needle_holder", "needle holder"),
+    ("Tourniquet", "tourniquet"),
+    ("Surgical_staple", "surgical stapler"),
+    ("Operating_table", "operating table"),
+    ("Electrosurgery", "electrosurgical unit"),
+
+    # --- Mobility & support ---------------------------------------------------
+    ("Hospital_bed", "hospital bed"),
+    ("Stretcher", "stretcher"),
+    ("Wheelchair", "wheelchair"),
+    ("Crutch", "crutch"),
+    ("Patient_lift", "patient lift"),
+    ("Crash_cart", "crash cart"),
+
+    # --- Sterile / infection control ------------------------------------------
+    ("Autoclave", "autoclave"),
+    ("Surgical_mask", "surgical mask"),
+    ("N95_respirator", "N95 respirator"),
+    ("Medical_glove", "medical glove"),
+
+    # --- Wound care -----------------------------------------------------------
+    ("Negative-pressure_wound_therapy", "wound VAC"),
+    ("Wound_closure_strip", "wound closure strip"),
+
+    # --- Neuro / pain / rehab -------------------------------------------------
+    ("Transcutaneous_electrical_nerve_stimulation", "TENS unit"),
+    ("Deep_brain_stimulation", "DBS device"),
+    ("Transcranial_magnetic_stimulation", "TMS device"),
+    ("Transcranial_direct-current_stimulation", "tDCS device"),
+
+    # --- Ophthalmology & ENT --------------------------------------------------
+    ("Slit_lamp", "slit lamp"),
+    ("Tonometry", "tonometer"),
+    ("Cochlear_implant", "cochlear implant"),
+
+    # --- Neonatal / paediatric ------------------------------------------------
+    ("Infant_incubator", "infant incubator"),
+    ("Phototherapy_in_neonates", "neonatal phototherapy lamp"),
+    ("Neonatal_resuscitation", "neonatal resuscitator"),
+
+    # --- Miscellaneous bedside ------------------------------------------------
     ("Wristband", "patient wristband"),
+    ("Hyperbaric_medicine", "hyperbaric chamber"),
+    ("Colostomy_bag", "colostomy bag"),
+    ("Compression_stockings", "compression stockings"),
+    ("Traction_(orthopedics)", "traction device"),
+    ("External_fixation", "external fixator"),
+    ("Splint_(medicine)", "splint"),
+    ("Cervical_collar", "cervical collar"),
 ]
 
 
 def _http_get(url: str, *, timeout: float = HTTP_TIMEOUT, retries: int = 3) -> bytes:
-    """Fetch with retry-on-429 backoff. Wikipedia's rate limit is generous
-    (~200 req/s) but bursts get throttled briefly; back off and try again.
-    """
     last_exc: Exception | None = None
     for attempt in range(retries + 1):
         req = urllib.request.Request(url, headers=HEADERS)
@@ -88,15 +206,15 @@ def _http_get(url: str, *, timeout: float = HTTP_TIMEOUT, retries: int = 3) -> b
         except urllib.error.HTTPError as e:
             last_exc = e
             if e.code == 429 and attempt < retries:
-                wait = 6 * (attempt + 1)
-                log.info("  429 rate-limited; sleeping %ds before retry", wait)
+                wait = 8 * (attempt + 1)
+                log.info("  429 rate-limited; sleeping %ds", wait)
                 time.sleep(wait)
                 continue
             raise
         except Exception as e:  # noqa: BLE001
             last_exc = e
             if attempt < retries:
-                time.sleep(2)
+                time.sleep(3)
                 continue
             raise
     if last_exc:
@@ -147,20 +265,18 @@ def _download_and_downsize(url: str, *, cache_path: Path) -> bytes | None:
 
 
 def _summary_to_record(summary: dict, friendly_name: str) -> dict | None:
-    title = summary.get("title") or friendly_name
+    title   = summary.get("title") or friendly_name
     extract = (summary.get("extract") or "").strip()
     if not extract:
         return None
 
-    # Prefer the thumbnail (pre-cached, served without per-IP burst limits) over
-    # the original. Wikimedia returns 429 on bursty originalimage fetches.
     img_meta = summary.get("thumbnail") or summary.get("originalimage") or {}
-    img_url = img_meta.get("source")
+    img_url  = img_meta.get("source")
     image_data: dict = {}
     if img_url:
-        slug = title.replace("/", "_").replace(" ", "_")
+        slug       = title.replace("/", "_").replace(" ", "_")
         cache_path = CACHE_DIR / "images" / f"{slug}.jpg"
-        jpeg = _download_and_downsize(img_url, cache_path=cache_path)
+        jpeg       = _download_and_downsize(img_url, cache_path=cache_path)
         if jpeg:
             image_data = {
                 "image_b64": base64.b64encode(jpeg).decode("ascii"),
@@ -173,10 +289,10 @@ def _summary_to_record(summary: dict, friendly_name: str) -> dict | None:
             }
 
     return {
-        "name": friendly_name,
-        "category": "equipment",
+        "name":       friendly_name,
+        "category":   "equipment",
         "wiki_title": title,
-        "text": extract,
+        "text":       extract,
         "source_doc": f"Wikipedia: {title}",
         "_provenance": "en.wikipedia.org (CC-BY-SA 4.0 text)",
         **image_data,
@@ -185,11 +301,18 @@ def _summary_to_record(summary: dict, friendly_name: str) -> dict | None:
 
 def ingest(out_path: Path) -> tuple[int, int]:
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    written = 0
+    # Deduplicate by friendly name (last definition wins for identical names)
+    seen: dict[str, tuple[str, str]] = {}
+    for title, friendly in EQUIPMENT_LIST:
+        seen[friendly] = (title, friendly)
+    deduped = list(seen.values())
+    log.info("ingest: %d unique equipment entries", len(deduped))
+
+    written    = 0
     with_image = 0
     with out_path.open("w", encoding="utf-8") as f:
-        for title, friendly in EQUIPMENT_LIST:
-            log.info("fetching %s (%s)", title, friendly)
+        for i, (title, friendly) in enumerate(deduped):
+            log.info("[%d/%d] fetching %s (%s)", i + 1, len(deduped), title, friendly)
             summary = _fetch_summary(title)
             if not summary:
                 continue
@@ -202,7 +325,7 @@ def ingest(out_path: Path) -> tuple[int, int]:
             if "image_b64" in rec:
                 with_image += 1
                 log.info("  + image (%d KB b64)", len(rec["image_b64"]) // 1024)
-            time.sleep(1.0)  # be polite to Wikipedia (avoids burst 429s)
+            time.sleep(0.8)  # polite to Wikipedia
     return written, with_image
 
 
@@ -210,7 +333,10 @@ def main() -> None:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--out", default=str(OUT_PATH))
     args = p.parse_args()
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(name)s %(levelname)s %(message)s",
+    )
     n, n_img = ingest(Path(args.out))
     log.info("wrote %d equipment entries (%d with images) → %s", n, n_img, args.out)
 
