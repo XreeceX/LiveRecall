@@ -188,8 +188,3 @@ class ScribeSession:
 async def _maybe_await(x: Any) -> None:
     if asyncio.iscoroutine(x):
         await x
-
-
-# Back-compat alias so callers that imported the old class name still work
-# during the swap transition.
-DeepgramSession = ScribeSession

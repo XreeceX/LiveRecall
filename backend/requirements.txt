@@ -1,6 +1,9 @@
 fastapi==0.115.4
 uvicorn[standard]==0.32.0
 python-dotenv==1.0.1
+# Pydantic 2.11+ triggers forward-ref errors when constructing ChatOpenAI
+# (Vision /snap path). Keep below 2.11 until langchain-openai catches up.
+pydantic>=2.7.4,<2.11
 
 # Mongo
 motor==3.7.1
@@ -17,7 +20,6 @@ openai==1.55.3
 livekit>=0.18.1
 livekit-agents>=0.12.16,<1.0
 livekit-api>=0.8.0
-livekit-plugins-deepgram>=0.7.0,<1.0
 livekit-plugins-elevenlabs>=0.7.10,<1.0
 livekit-plugins-openai>=0.10.10,<1.0
 livekit-plugins-silero>=0.7.4,<1.0
