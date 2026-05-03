@@ -2,8 +2,13 @@
 
 from __future__ import annotations
 
+import re
 import time
 import uuid
+
+# Match Wh-questions anywhere in the utterance so wake-style prefixes
+# ("hey meta, what am I looking at") still route to the question pipeline.
+_WH_ANYWHERE = re.compile(r"\b(what|when|where|why|how|which|who)\b")
 
 
 def now_ms() -> int:
@@ -22,5 +27,23 @@ def is_question(text: str) -> bool:
     t = text.strip().lower()
     if t.endswith("?"):
         return True
-    starters = ("what", "when", "where", "why", "how", "which", "who", "is ", "are ", "can ", "could ", "should ", "do ", "does ", "did ")
-    return t.startswith(starters)
+    starters = (
+        "what",
+        "when",
+        "where",
+        "why",
+        "how",
+        "which",
+        "who",
+        "is ",
+        "are ",
+        "can ",
+        "could ",
+        "should ",
+        "do ",
+        "does ",
+        "did ",
+    )
+    if t.startswith(starters):
+        return True
+    return bool(_WH_ANYWHERE.search(t))
