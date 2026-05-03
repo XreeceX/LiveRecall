@@ -38,18 +38,21 @@ Atlas** is the substrate, **LiveKit Cloud** is the transport.
 | ----------------------------------------- | ------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------- |
 | 🕶️ **Meta Ray-Ban v2 (POV, headline)**   | `[scripts/bridge_rayban_snap.py](./scripts/bridge_rayban_snap.py)` → `/snap`         | Real glasses. Mirror the Meta AI iPhone app to Mac, screenshot every 3 s. Deterministic, Path A. See § 4.1. |
 | 🎬 **Ray-Ban pre-recorded replay**        | `[scripts/bridge_rayban.py](./scripts/bridge_rayban.py)` → LiveKit room as `glasses` | Publish a recorded Ray-Ban MP4 into the demo room for a fully-deterministic walkthrough. See § 4.2.         |
+| 📲 **Native iOS / Android publisher**     | `[mobile/](./mobile)` — Wearables Device Access Toolkit → LiveKit (`capture_mode="glasses"`) | Real glasses streaming live into LiveKit through a phone (no screen-mirror). See `mobile/README.md`.        |
 | 🧪 **Webcam stand-in**                    | `[phone/glasses.html](./phone/glasses.html)` — `capture_mode="glasses"`              | Laptop webcam / phone in a head strap when the real glasses aren't around. Zero setup.                      |
 | 📱 **Phone browser (universal fallback)** | `[phone/index.html](./phone/index.html)` — `capture_mode="phone"`                    | Day-1 adoption: every clinician on shift already has one, no hardware purchase needed.                      |
 
 
-All four paths converge on the same Vision prompt (POV hint flips on
+All five paths converge on the same Vision prompt (POV hint flips on
 `capture_mode`) and the same downstream Router → Retrievers → Reranker →
 Answerer pipeline. The branch happens at the ingestion seam only, so
 whichever capture wins in the field, the rest of the system is unchanged.
-The path to a *live* Meta Live AI → LiveKit ingress integration (no
-screen-mirror in the middle) is documented in
-`[DECISIONS.md](./DECISIONS.md)` entry (g). Compliance rules apply to every
-capture path: mock patients only, no real PHI.
+The native iOS/Android publishers in `[mobile/](./mobile)` are the
+production path for the Meta Live AI → LiveKit ingress integration
+documented in `[DECISIONS.md](./DECISIONS.md)` entry (g) — they take
+glasses frames over Bluetooth via the Wearables Device Access Toolkit and
+publish into the same LiveKit room a phone browser would. Compliance rules
+apply to every capture path: mock patients only, no real PHI.
 
 ---
 
@@ -95,6 +98,10 @@ backend/        FastAPI + LiveKit Agents worker + 5 LangChain agents + Mongo
   embeddings.py text-embedding-3-small batched + cached
   tracing.py    LangChain MongoTraceCallback → agent_traces
 phone/          Single-file LiveKit client for any phone browser (incl. Snap & ask)
+mobile/         Native iOS + Android publishers (Meta Wearables Toolkit → LiveKit)
+                ios/LiveRecallGlasses/      — SwiftUI app, XcodeGen project.yml
+                android/LiveRecallGlasses/  — Kotlin + Compose, Gradle/AGP 8.5
+                README.md                    — Mock Device Kit, signing, distribution
 dashboard/      Next.js + Tailwind judge-facing dashboard
 scripts/        seed_mongo.py           — 5 patients, 50 clinical events (TS), 3 drug references, 5 past notes
                 bridge_rayban_snap.py   — Meta Ray-Ban bridge: periodic screenshots → /snap (primary)
@@ -347,9 +354,11 @@ the first-person POV prompt, the Router/Retrievers pull P-204 events and
 metformin monograph chunks, and the dashboard lights up the `GLASSES` tag.
 Why this shape instead of a live video bridge: Ray-Ban Meta v2 doesn't
 expose a public live-video endpoint we can subscribe to from outside the
-Meta AI app, and `/snap` is already the deterministic, judge-proof entry
-point. See `[DECISIONS.md](./DECISIONS.md)` entry (g) for the live-API
-upgrade path.
+Meta AI app from a desktop, and `/snap` is already the deterministic,
+judge-proof entry point. The native iOS/Android apps in
+`[mobile/](./mobile)` (§ 4.3) cover the live-streaming path through a
+phone using Meta's Wearables Device Access Toolkit; see
+`[DECISIONS.md](./DECISIONS.md)` entry (g) for the rationale.
 
 **Screen-recording permission.** The first time Python captures the screen,
 the OS may prompt for permission (**macOS:** *System Settings → Privacy &
@@ -384,6 +393,33 @@ Requires `av>=13.0` (PyAV; already in `backend/requirements.txt`). Any
 standard H.264/AAC MP4 works; frames are decoded at the file's native fps
 and handed to LiveKit's `AVSynchronizer`, which keeps audio and video in
 lock-step.
+
+### 4.3. Native iOS / Android publisher (live glasses → LiveKit)
+
+When you have approved access to the [Meta Wearables Device Access
+Toolkit](https://wearables.developer.meta.com/), this is the path that
+removes the desktop screen-mirror entirely: the phone speaks Bluetooth to
+the glasses, the toolkit hands raw video frames to a thin native app, and
+the app publishes them straight into the same LiveKit room a phone browser
+would (`capture_mode="glasses"`).
+
+```
+Glasses ── Bluetooth ──▶ phone app ── Wi-Fi/LTE ──▶ LiveKit ──▶ worker
+```
+
+Both apps live under [`mobile/`](./mobile):
+
+- [`mobile/ios/LiveRecallGlasses/`](./mobile/ios/LiveRecallGlasses) —
+  Swift/SwiftUI, [XcodeGen](https://github.com/yonaskolb/XcodeGen) project
+  manifest at `project.yml`. iOS 15.2+ to match Meta's toolkit floor.
+- [`mobile/android/LiveRecallGlasses/`](./mobile/android/LiveRecallGlasses)
+  — Kotlin/Compose, AGP 8.5, min SDK 29 to match Meta's toolkit floor.
+
+Both apps default to a **phone-camera fallback** so they build and publish
+end-to-end before the Meta Swift package / Maven dep is wired up — toggle
+`USE_WEARABLES_SDK` to flip on the real toolkit calls. Full setup
+(Wearables credentials, signing, TestFlight / internal track distribution)
+is in [`mobile/README.md`](./mobile/README.md).
 
 ### 5. Try it
 
