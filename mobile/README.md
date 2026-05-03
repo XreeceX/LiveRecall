@@ -201,10 +201,11 @@ host. For an actual phone:
   binds `0.0.0.0` and CORS is wide open in `backend/main.py`.
 - **Cellular / hostile networks**: tunnel the backend with
   ```bash
-  ngrok http 8000
-  # or:  localhost.run --port 8000
+  cloudflared tunnel --url http://localhost:8000
   ```
-  and use the HTTPS URL ngrok prints. iOS Safari requires HTTPS for
+  and use the printed `https://….trycloudflare.com` URL (Quick Tunnel; free,
+  no account). Run a second tunnel for port `8080` if you are serving
+  `phone/` the same way. iOS Safari requires HTTPS for
   cross-host media access; the native LiveKit iOS SDK does not, but the
   `/token` HTTPS hop avoids ATS warnings.
 
@@ -226,7 +227,7 @@ host. For an actual phone:
 | Symptom | Likely cause / fix |
 |---|---|
 | `backend HTTP 500: LiveKit credentials not configured` | Backend `.env` is missing `LIVEKIT_API_KEY` / `LIVEKIT_API_SECRET` / `LIVEKIT_URL`. |
-| `livekit: connect failed — connection refused` | The phone can't reach the backend; switch from `localhost` to the laptop LAN IP or open an ngrok tunnel. |
+| `livekit: connect failed — connection refused` | The phone can't reach the backend; switch from `localhost` to the laptop LAN IP or expose the API with a Quick Tunnel (`cloudflared tunnel --url http://localhost:8000`). |
 | Black preview, but `livekit: connected` shows | No video track was published. Check the Wearables stream actually started (look for `wearables: startStream()` in the log) or flip Settings to phone-camera mode. |
 | Dashboard pill shows **PHONE** instead of **GLASSES** | `/token` got `capture_mode="phone"` — confirm Settings has glasses-source on, and that the `BackendClient` request body still has `"capture_mode": "glasses"`. |
 | Android: `app crashes on start` complaining about missing `BLUETOOTH_CONNECT` | API 31+ runtime permission. The launcher requests it on startup; if denied, re-grant from app settings. |
