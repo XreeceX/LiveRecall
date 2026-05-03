@@ -9,17 +9,18 @@ drives it on a timer.
 Why this shape vs the MP4-into-LiveKit bridge:
 
   - Ray-Ban Meta v2 + the Meta AI app don't expose a public live-video
-    endpoint we can subscribe to. Mirroring the iPhone to macOS and
-    grabbing screenshots is the only in-reach way to pipe the real
-    POV frames into the demo during a hackathon.
+    endpoint we can subscribe to. Mirroring the paired phone to a desktop
+    (QuickTime / Phone Link / AirPlay receiver / third-party cast) and
+    grabbing screenshots is the usual way to pipe real POV frames in.
   - ``/snap`` is already the deterministic, judge-proof entry point: it
     runs Vision synchronously, writes ``scene_context``, warms the Local
     Retrieval cache, and optionally fires a question. Dropping
     screenshots in on a timer gives you a continuous-capture feel without
     needing a real WebRTC bridge.
 
-Runs on macOS only (uses the built-in ``screencapture`` binary). No extra
-Python deps beyond what's already in ``backend/requirements.txt``.
+**Capture backend:** all desktop OSes use the ``mss`` package (same coordinate
+system as ``--pick``). Install via ``backend/requirements.txt``. Screen-recording
+permission still applies (macOS Settings; Windows may prompt depending on version).
 
 Usage::
 
@@ -44,9 +45,9 @@ from __future__ import annotations
 
 import argparse
 import base64
+import ctypes
 import hashlib
 import logging
-import subprocess
 import sys
 import tempfile
 import time
@@ -59,7 +60,6 @@ from PIL import Image
 
 log = logging.getLogger("bridge_rayban_snap")
 
-
 MAX_EDGE_PX = 640               # cap long edge before upload; Vision doesn't need more
 JPEG_QUALITY = 72               # good-enough for OCR + object recognition
 DEFAULT_INTERVAL_S = 3.0        # matches README demo cadence
@@ -67,22 +67,36 @@ DEFAULT_BACKEND = "http://localhost:8001"
 DEFAULT_SESSION = "demo"
 
 
-# --- Screen capture ---------------------------------------------------------
+def _platform_capture(region: str | None, out_path: Path) -> None:
+    """Write a JPEG screenshot to ``out_path`` using ``mss`` (Windows, macOS, Linux).
 
-def _screencapture_region(region: str | None, out_path: Path) -> None:
-    """Wrap macOS ``screencapture`` for a non-interactive region/fullscreen grab.
-
-    ``region`` is either ``"x,y,w,h"`` or ``None`` for whole main display.
-    ``-x`` silences the shutter sound, ``-t jpg`` writes JPEG directly so we
-    don't re-encode twice.
+    ``region`` is ``"x,y,w,h"`` in physical screen pixels matching ``--pick``,
+    or ``None`` for the primary monitor (`mss.monitors[1]`).
     """
-    cmd = ["screencapture", "-x", "-t", "jpg"]
-    if region:
-        cmd += ["-R", region]
-    else:
-        cmd += ["-m"]  # main monitor only
-    cmd.append(str(out_path))
-    subprocess.run(cmd, check=True, capture_output=True)
+    try:
+        import mss
+    except ImportError as e:
+        raise SystemExit(
+            "Screen capture requires `mss`. Install: pip install -r backend/requirements.txt"
+        ) from e
+
+    with mss.mss() as sct:
+        if region:
+            parts = [int(p.strip()) for p in region.split(",")]
+            if len(parts) != 4:
+                raise ValueError(f"bad region: {region}")
+            x, y, w, h = parts
+            if w < 1 or h < 1:
+                raise ValueError(f"region width/height must be positive: {region}")
+            box = {"left": x, "top": y, "width": w, "height": h}
+        else:
+            box = sct.monitors[1]
+        shot = sct.grab(box)
+        img = Image.frombytes("RGB", shot.size, shot.bgra, "raw", "BGRX")
+        img.save(out_path, format="JPEG", quality=JPEG_QUALITY)
+
+
+# --- Screen capture ---------------------------------------------------------
 
 
 def _encode_for_snap(path: Path) -> tuple[str, str]:
@@ -104,13 +118,25 @@ def _encode_for_snap(path: Path) -> tuple[str, str]:
 
 # --- Region picker (tkinter overlay) ----------------------------------------
 
+def _ensure_windows_physical_pixels() -> None:
+    """Make Tk root coords match ``mss`` (physical pixels) on hi-DPI Windows."""
+    if sys.platform != "win32":
+        return
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)  # PROCESS_PER_MONITOR_DPI_AWARE
+    except Exception:
+        try:
+            ctypes.windll.user32.SetProcessDPIAware()
+        except Exception:
+            pass
+
+
 def pick_region_interactive() -> tuple[int, int, int, int]:
     """Full-screen translucent overlay; user drags a rectangle.
 
-    Returns (x, y, w, h) in *screen* pixel coordinates suitable for
-    ``screencapture -R``. We divide tk's logical coords by 1.0 since tk on
-    macOS reports points == screen pixels for the menubar-less root window.
+    Returns (x, y, w, h) in physical screen pixels — same space as ``mss.grab``.
     """
+    _ensure_windows_physical_pixels()
     try:
         import tkinter as tk
     except ImportError as e:  # pragma: no cover
@@ -257,9 +283,8 @@ def run(args: argparse.Namespace) -> int:
 
     # --- One-shot mode -------------------------------------------------------
     # Intended for hotkey-driven workflows: user scrubs a pre-recorded Ray-Ban
-    # MP4 to a frame of interest (QuickTime / VLC / any player window), binds
-    # a macOS Shortcut (or Hammerspoon) to this command, and gets exactly one
-    # /snap per keypress. Same HTTP path Path A uses — nothing new server-side.
+    # MP4 to a frame of interest (any player window), binds a desktop hotkey to
+    # this command, and gets exactly one /snap per keypress.
     if args.once:
         log.info(
             "one-shot snap → %s (session=%s, q=%r)", backend, session_id, question
@@ -269,15 +294,15 @@ def run(args: argparse.Namespace) -> int:
             prime_session(client, backend, session_id)
             t0 = time.time()
             try:
-                _screencapture_region(region, shot)
+                _platform_capture(region, shot)
                 b64, _ = _encode_for_snap(shot)
                 resp = post_snap(client, backend, session_id, b64, question)
-            except subprocess.CalledProcessError as e:
-                log.error("screencapture failed: %s", e.stderr.decode() if e.stderr else e)
-                return 3
             except httpx.HTTPError as e:
                 log.error("/snap failed: %s", e)
                 return 4
+            except Exception as e:
+                log.error("screen capture failed: %s", e)
+                return 3
             finally:
                 try:
                     shot.unlink(missing_ok=True)
@@ -317,7 +342,7 @@ def run(args: argparse.Namespace) -> int:
                 shot = tmpdir / f"shot_{n:05d}.jpg"
                 try:
                     t0 = time.time()
-                    _screencapture_region(region, shot)
+                    _platform_capture(region, shot)
                     b64, h = _encode_for_snap(shot)
                     if args.dedup and h == last_hash:
                         log.info("#%04d skipped (unchanged, hash=%s)", n, h)
@@ -335,8 +360,8 @@ def run(args: argparse.Namespace) -> int:
                             vis[:4],
                             qid or "-",
                         )
-                except subprocess.CalledProcessError as e:
-                    log.error("screencapture failed: %s", e.stderr.decode() if e.stderr else e)
+                except OSError as e:
+                    log.error("screen capture failed (permission or display?): %s", e)
                 except httpx.HTTPError as e:
                     log.error("/snap failed: %s", e)
                 except Exception as e:  # noqa: BLE001
@@ -364,7 +389,7 @@ def _parse_args() -> argparse.Namespace:
     )
     p.add_argument(
         "--region",
-        help="screen region to capture as 'x,y,w,h' (macOS pixel coords).",
+        help="screen region as 'x,y,w,h' in physical pixels (all desktop OSes).",
     )
     p.add_argument(
         "--fullscreen",
@@ -408,8 +433,8 @@ def _parse_args() -> argparse.Namespace:
         "--once",
         action="store_true",
         help="take exactly one snapshot, POST it to /snap, print the JSON "
-             "response, and exit. Pair with a macOS Shortcut / Hammerspoon "
-             "hotkey for on-demand Path A capture from a paused MP4 player.",
+             "response, and exit. Pair with a desktop hotkey (Shortcuts, "
+             "AutoHotkey, etc.) for on-demand capture from a paused mirror/player.",
     )
     p.add_argument(
         "-v", "--verbose", action="store_true", help="enable debug logging"

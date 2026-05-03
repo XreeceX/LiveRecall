@@ -301,23 +301,26 @@ Important:
 - The pages ask for your backend URL on first launch — point it at the laptop IP, not `localhost`, when hitting from another device.
 - iOS Safari requires HTTPS for camera/mic on remote hosts. Easiest path: tether the phone to the laptop via hotspot and wrap your local backend in HTTPS via `[localhost.run](https://localhost.run/)` or `ngrok http 8080`.
 
-### 4.1. Meta Ray-Ban bridge — screenshot loop (primary, macOS)
+### 4.1. Meta Ray-Ban bridge — screenshot loop (primary; Windows, macOS, Linux)
 
 Drives the already-verified Path A (`POST /snap` with `capture_mode="glasses"`)
-on a timer. End-to-end:
+on a timer. Uses **`mss`** everywhere so region coords match `--pick`. End-to-end:
 
 1. Put on the Ray-Ban Meta v2. Open **Meta AI** on the paired iPhone so the glasses' POV is visible in the app.
-2. Mirror the iPhone to the Mac — QuickTime Player → *File → New Movie Recording* → down-arrow next to the record button → pick the iPhone. (AirPlay to a Mac receiver works too.) Arrange the mirror window so the glasses POV fills it.
+2. Mirror the phone to this machine — e.g. **macOS:** QuickTime → *File → New Movie Recording* → camera dropdown → iPhone; **Windows:** Phone Link (*Features → Phone screen*) or your preferred cast/Mirroring tool. Arrange the mirror so the glasses POV fills the crop region.
 3. Pick the screen region to capture (one-time):
   ```bash
    make bridge-rayban-pick
+   # or (Windows PowerShell / cmd, from repo root with venv active):
+   #   .venv\Scripts\activate
+   #   python -m scripts.bridge_rayban_snap --pick
    # a translucent overlay appears → drag a rectangle over the mirror window
    # → prints: REGION 120,90,960,540
   ```
 4. Run the bridge. Every `INTERVAL` seconds (default **3 s**) it screenshots that region, downsizes to ≤640 px long-edge, JPEG-encodes, and POSTs to `/snap`:
   ```bash
    make bridge-rayban REGION=120,90,960,540 INTERVAL=3 SESSION=demo
-   # or directly:
+   # or directly (any OS):
    python -m scripts.bridge_rayban_snap \
      --region 120,90,960,540 --interval 3 \
      --backend http://localhost:8000 --session-id demo
@@ -348,11 +351,12 @@ Meta AI app, and `/snap` is already the deterministic, judge-proof entry
 point. See `[DECISIONS.md](./DECISIONS.md)` entry (g) for the live-API
 upgrade path.
 
-**macOS first-run gotcha.** The first time `screencapture` grabs your
-screen, macOS will prompt for **Screen Recording** permission on whichever
-app is running Python (Terminal, iTerm, VS Code, etc.). Approve it in
-*System Settings → Privacy & Security → Screen Recording*, **quit and
-relaunch** that app, then re-run the bridge. After that it's silent.
+**Screen-recording permission.** The first time Python captures the screen,
+the OS may prompt for permission (**macOS:** *System Settings → Privacy &
+Security → Screen Recording* for Terminal / VS Code / Python; **quit and
+relaunch** the app after approving). **Windows:** newer builds may show a
+privacy prompt for screen capture. **Linux (Wayland):** some sessions restrict
+capture — use X11 or grant the compositor's portal permission if grabs fail.
 
 **Loop cadence note.** The loop is synchronous — each iteration waits for
 `/snap` to return before sleeping. If Vision takes longer than `INTERVAL`
@@ -520,7 +524,7 @@ The dashboard sidebar lights each one up the moment it's actually exercised.
 
 | Symptom                                                       | Probable cause & fix                                                                                                                                                                                                          |
 | ------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `screencapture` returns a blank / black image from the bridge | macOS Screen Recording permission not granted. *System Settings → Privacy & Security → Screen Recording* → approve the app running Python → quit & relaunch it → re-run.                                                      |
+| Bridge captures a blank / black image                    | OS denied screen capture — macOS: Screen Recording permission for the Python host app; Windows/Linux: check privacy settings or Wayland portal; retry after granting and restarting the terminal/IDE.                                                      |
 | `/snap` takes 6–10 s and objects come back empty              | Vision got an IDE screenshot / non-clinical frame. Check that the `--region` actually covers the Meta AI mirror window. Run `make bridge-rayban-pick` again to re-select.                                                     |
 | "Address already in use" when starting the backend            | A prior `python -m backend.main` is still bound. `lsof -iTCP:$BACKEND_PORT -sTCP:LISTEN` to find the PID, kill it, relaunch.                                                                                                  |
 | Vector search returns 0 hits                                  | Atlas Vector Search index isn't `READY` yet (can take a minute after `python -m backend.mongo`). The References retriever falls back to `$text` — still works, less adaptive. Re-run § Verify step 1 to confirm index status. |
