@@ -1,0 +1,16 @@
+# XcodeGen-generated artifacts (regenerable from project.yml).
+*.xcodeproj/
+*.xcworkspace/
+xcuserdata/
+*.xcuserstate
+*.xcuserdatad/
+
+# Build / SPM caches
+.build/
+DerivedData/
+build/
+.swiftpm/
+
+# Misc
+.DS_Store
+Pods/

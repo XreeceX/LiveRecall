@@ -1,0 +1,101 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Info.plist for LiveRecallGlasses.
+
+  Replace every REPLACE_ME_* value below with the credentials from your
+  approved Meta Wearables Dev Center project AND your Apple Developer team.
+
+  Keys you'll touch:
+    AppLinkURLScheme  - the URL scheme the Meta AI app uses to call back
+                        into this app during Wearables registration.
+    MetaAppID         - your project ID from Wearables Dev Center.
+    ClientToken       - the client token from Wearables Dev Center.
+    TeamID            - your Apple Developer team identifier.
+    CFBundleURLTypes  - register the same URL scheme so iOS routes
+                        wearables registration callbacks back to this app.
+
+  See: https://wearables.developer.meta.com/docs/build-integration-ios/
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>en</string>
+    <key>CFBundleDisplayName</key>
+    <string>LiveRecall</string>
+    <key>CFBundleExecutable</key>
+    <string>$(EXECUTABLE_NAME)</string>
+    <key>CFBundleIdentifier</key>
+    <string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleName</key>
+    <string>$(PRODUCT_NAME)</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>0.1.0</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+    <key>LSRequiresIPhoneOS</key>
+    <true/>
+    <key>UILaunchScreen</key>
+    <dict/>
+    <key>UIRequiredDeviceCapabilities</key>
+    <array>
+        <string>arm64</string>
+    </array>
+    <key>UISupportedInterfaceOrientations</key>
+    <array>
+        <string>UIInterfaceOrientationPortrait</string>
+    </array>
+    <key>UISupportedInterfaceOrientations~ipad</key>
+    <array>
+        <string>UIInterfaceOrientationPortrait</string>
+        <string>UIInterfaceOrientationLandscapeLeft</string>
+        <string>UIInterfaceOrientationLandscapeRight</string>
+    </array>
+
+    <!-- Permission strings (required for camera + mic + bluetooth + LAN). -->
+    <key>NSCameraUsageDescription</key>
+    <string>LiveRecall uses the phone camera as a fallback when the glasses are not connected, so you can frame the bedside scene.</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>LiveRecall captures audio so a clinician can ask questions during a session.</string>
+    <key>NSBluetoothAlwaysUsageDescription</key>
+    <string>LiveRecall connects to your Ray-Ban Meta glasses via Bluetooth using the Meta Wearables Device Access Toolkit.</string>
+    <key>NSBluetoothPeripheralUsageDescription</key>
+    <string>LiveRecall uses Bluetooth to connect to your Meta wearables.</string>
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>LiveRecall connects to your LiveRecall backend over the local network for low-latency token exchange.</string>
+
+    <!-- Meta Wearables Device Access Toolkit registration. -->
+    <key>AppLinkURLScheme</key>
+    <string>liverecallglasses</string>
+    <key>MetaAppID</key>
+    <string>REPLACE_ME_META_APP_ID</string>
+    <key>ClientToken</key>
+    <string>REPLACE_ME_CLIENT_TOKEN</string>
+    <key>TeamID</key>
+    <string>REPLACE_ME_APPLE_TEAM_ID</string>
+
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleURLName</key>
+            <string>com.liverecall.glasses.metawearables</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>liverecallglasses</string>
+            </array>
+        </dict>
+    </array>
+
+    <!-- Allow plain-HTTP backends during development (e.g. http://localhost:8000
+         from a phone over your laptop's hotspot). Tighten before shipping. -->
+    <key>NSAppTransportSecurity</key>
+    <dict>
+        <key>NSAllowsArbitraryLoads</key>
+        <true/>
+    </dict>
+</dict>
+</plist>

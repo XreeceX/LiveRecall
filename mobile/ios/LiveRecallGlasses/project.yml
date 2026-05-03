@@ -1,0 +1,58 @@
+# XcodeGen project manifest for LiveRecallGlasses (iOS).
+#
+# Why XcodeGen instead of a checked-in .xcodeproj:
+#   - .pbxproj is a binary-ish format that conflicts horribly in git.
+#   - This file (~30 lines) regenerates the whole Xcode project deterministically.
+#
+# To generate the project:
+#   brew install xcodegen
+#   cd LiveRecall/mobile/ios/LiveRecallGlasses
+#   xcodegen generate
+#   open LiveRecallGlasses.xcodeproj
+#
+# If you don't want to install XcodeGen, see ../../README.md for the manual
+# "create a new SwiftUI iOS app and drag in these files" path.
+
+name: LiveRecallGlasses
+options:
+  bundleIdPrefix: com.liverecall
+  deploymentTarget:
+    iOS: "15.2"
+  createIntermediateGroups: true
+
+# ---------------------------------------------------------------------------
+# Swift Package dependencies.
+#
+# LiveKit's Swift client SDK is public on GitHub and pulls cleanly via SPM.
+# The Meta Wearables Device Access Toolkit ships as a Swift Package too,
+# but the URL/version comes from your approved developer account at
+# https://wearables.developer.meta.com/. Uncomment the WearablesDAT block
+# once you've grabbed the package URL from the Wearables Dev Center.
+# ---------------------------------------------------------------------------
+packages:
+  LiveKit:
+    url: https://github.com/livekit/client-sdk-swift
+    from: "2.0.0"
+  # WearablesDAT:
+  #   url: https://wearables.developer.meta.com/.../wearables-dat-ios
+  #   from: "0.3.0"
+
+targets:
+  LiveRecallGlasses:
+    type: application
+    platform: iOS
+    sources:
+      - path: LiveRecallGlasses
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.liverecall.glasses
+        TARGETED_DEVICE_FAMILY: "1,2"
+        INFOPLIST_FILE: LiveRecallGlasses/Resources/Info.plist
+        ENABLE_USER_SCRIPT_SANDBOXING: NO
+        SWIFT_VERSION: "5.9"
+        DEVELOPMENT_TEAM: "REPLACE_ME_APPLE_TEAM_ID"
+    dependencies:
+      - package: LiveKit
+        product: LiveKit
+      # - package: WearablesDAT
+      #   product: WearablesDAT
