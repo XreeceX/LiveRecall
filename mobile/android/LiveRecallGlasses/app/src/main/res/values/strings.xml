@@ -1,0 +1,13 @@
+<resources>
+    <string name="app_name">LiveRecall</string>
+    <string name="connect_button">Connect (Ray-Ban POV)</string>
+    <string name="leave_button">Leave</string>
+    <string name="status_disconnected">disconnected</string>
+    <string name="status_connecting">connecting…</string>
+    <string name="status_live">live · POV</string>
+    <string name="status_error">error</string>
+    <string name="ongoing_notification_title">LiveRecall · streaming</string>
+    <string name="ongoing_notification_text">Publishing glasses POV to your LiveRecall room.</string>
+    <string name="ongoing_channel_id">liverecall_publish</string>
+    <string name="ongoing_channel_name">Publishing</string>
+</resources>

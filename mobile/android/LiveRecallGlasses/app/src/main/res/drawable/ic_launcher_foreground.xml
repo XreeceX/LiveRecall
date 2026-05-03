@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Tiny purple "glasses" pictogram on a transparent foreground. -->
+    <group android:translateX="14" android:translateY="36">
+        <path
+            android:pathData="M12,18 m-12,0 a12,12 0 1,0 24,0 a12,12 0 1,0 -24,0"
+            android:fillColor="#A78BFA" />
+        <path
+            android:pathData="M68,18 m-12,0 a12,12 0 1,0 24,0 a12,12 0 1,0 -24,0"
+            android:fillColor="#60A5FA" />
+        <path
+            android:pathData="M24,18 L56,18"
+            android:strokeColor="#A78BFA"
+            android:strokeWidth="3" />
+    </group>
+</vector>

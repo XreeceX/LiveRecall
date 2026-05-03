@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- Network for /token + LiveKit. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <!-- Phone microphone (the clinician's voice goes through phone mic for
+         simplicity; Wearables toolkit currently exposes glasses audio via
+         Bluetooth profiles, not a separate developer API). -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+
+    <!-- Phone camera fallback used while the Wearables SDK isn't linked. -->
+    <uses-permission android:name="android.permission.CAMERA" />
+
+    <!-- Bluetooth permissions Meta toolkit / Meta AI app pairing rely on. -->
+    <uses-permission android:name="android.permission.BLUETOOTH" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <uses-permission android:name="android.permission.BLUETOOTH_SCAN"
+        android:usesPermissionFlags="neverForLocation"
+        tools:targetApi="31" />
+
+    <!-- Foreground service so LiveKit publishing keeps running when the
+         user navigates away (LiveKit's Android docs recommend this for
+         any publisher that needs to survive process backgrounding). -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <uses-feature android:name="android.hardware.camera"      android:required="false" />
+    <uses-feature android:name="android.hardware.bluetooth_le" android:required="false" />
+
+    <application
+        android:name=".GlassesApplication"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:theme="@style/Theme.LiveRecallGlasses"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules"
+        android:supportsRtl="true">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:theme="@style/Theme.LiveRecallGlasses"
+            android:configChanges="orientation|screenSize|keyboardHidden|uiMode">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+
+            <!-- Wearables registration callback from the Meta AI app.
+                 Scheme matches `manifestPlaceholders["appLinkScheme"]` in
+                 app/build.gradle.kts. -->
+            <intent-filter android:autoVerify="false">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="${appLinkScheme}" />
+            </intent-filter>
+        </activity>
+
+        <service
+            android:name=".service.PublisherService"
+            android:foregroundServiceType="microphone|camera"
+            android:exported="false" />
+
+        <!-- Meta Wearables toolkit registration metadata. Replace the
+             placeholders with the IDs from your approved Wearables Dev
+             Center project. -->
+        <meta-data android:name="com.meta.wearables.AppId"        android:value="${META_APP_ID}" />
+        <meta-data android:name="com.meta.wearables.ClientToken" android:value="${META_CLIENT_TOKEN}" />
+    </application>
+</manifest>
