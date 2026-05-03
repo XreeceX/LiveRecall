@@ -117,10 +117,13 @@
       .btn-secondary { background: #1f2937; color: var(--text); }
       .btn-danger { background: rgba(248, 113, 113, 0.2); color: var(--err); }
 
-      /* POV viewport — wider 16:9 framing to evoke first-person glasses. */
+      /* POV viewport — 16:9, but cap width from viewport height so ultrawide
+         windows don’t turn the preview into a short strip with heavy cover-crop. */
       .pov-frame {
         position: relative;
-        width: 100%;
+        width: min(100%, calc(76vh * 16 / 9));
+        max-width: 100%;
+        margin: 0 auto;
         aspect-ratio: 16 / 9;
         border-radius: 16px;
         overflow: hidden;
@@ -131,7 +134,8 @@
       .pov-frame video {
         width: 100%;
         height: 100%;
-        object-fit: cover;
+        object-fit: contain;
+        object-position: center;
         display: block;
       }
       /* Subtle reticle to sell the "first-person" framing. */
@@ -193,6 +197,35 @@
         line-height: 1.55;
       }
       .footnote a { color: var(--accent); }
+
+      /* Shown when this page is http://<LAN-IP>/… — browsers hide camera/mic there. */
+      .secure-banner {
+        display: none;
+        border: 1px solid rgba(251, 191, 36, 0.45);
+        background: rgba(251, 191, 36, 0.1);
+        border-radius: 14px;
+        padding: 14px;
+        font-size: 12px;
+        line-height: 1.55;
+        color: var(--text);
+      }
+      .secure-banner strong { color: var(--warn); }
+      .secure-banner code {
+        font-size: 11px;
+        background: #060914;
+        padding: 2px 6px;
+        border-radius: 4px;
+      }
+      .secure-banner pre {
+        margin: 10px 0 0;
+        padding: 10px;
+        background: #060914;
+        border-radius: 10px;
+        font-size: 11px;
+        overflow-x: auto;
+        white-space: pre-wrap;
+        word-break: break-all;
+      }
     </style>
   </head>
   <body>
@@ -211,6 +244,29 @@
         <span id="status" class="pill">disconnected</span>
       </div>
     </header>
+
+    <div id="secure-banner" class="secure-banner" role="alert">
+      <strong>Camera / mic are blocked on this URL</strong>
+      <p style="margin: 8px 0 0">
+        You opened this page over plain <code>http://</code> to a LAN address
+        (e.g. <code>10.x.x.x</code>). Chrome and Safari only expose
+        <code>navigator.mediaDevices</code> on a <strong>secure context</strong>:
+        <code>https://</code> or <code>http://localhost</code>. That is why Connect
+        shows <em>got token</em> then crashes — the token step works; camera access does not.
+      </p>
+      <p style="margin: 8px 0 0"><strong>Fix (pick one):</strong></p>
+      <ul style="margin: 6px 0 0; padding-left: 1.2em; color: var(--muted)">
+        <li><strong>Cloudflare Quick Tunnels (recommended, free)</strong> — install <code>cloudflared</code> (see <a href="https://developers.cloudflare.com/cloudflare-one/connections/connect-apps/install-and-setup/installation/" target="_blank" rel="noopener">Cloudflare install docs</a>; Windows: <code>winget install Cloudflare.cloudflared</code>). Run <strong>two</strong> terminals while <code>make phone</code> and <code>make backend</code> are up: <code>cloudflared tunnel --url http://localhost:8080</code> and <code>cloudflared tunnel --url http://localhost:8000</code>. Each prints a unique <code>https://….trycloudflare.com</code> URL — open the first + <code>/glasses.html</code> on your phone; paste the second into Backend URL.</li>
+        <li><strong>USB + port forward</strong> — advanced; treat <code>localhost</code> on the phone as your PC via <code>adb reverse</code>.</li>
+      </ul>
+      <pre>Terminal A (with `make phone` running):
+  cloudflared tunnel --url http://localhost:8080
+→ phone: https://XXXX.trycloudflare.com/glasses.html
+
+Terminal B (with `make backend` on :8000):
+  cloudflared tunnel --url http://localhost:8000
+→ Backend URL: https://YYYY.trycloudflare.com  (no trailing slash)</pre>
+    </div>
 
     <div class="panel">
       <label>Backend URL</label>
@@ -242,9 +298,16 @@
 
     <div class="panel" id="snap-panel">
       <label>Snap &amp; ask</label>
+      <p style="font-size: 12px; color: var(--muted); margin: 0 0 6px">
+        Grab one JPEG + kick off retrieval + answers on the dashboard.
+        If you leave the box blank we still send <strong>“What am I looking at?”</strong>
+        so Router → Answerer runs (same as typing it yourself).
+        <strong>Speaking:</strong> after Connect, talk into the mic; ElevenLabs STT commits after ~1&nbsp;s of silence.
+        This demo does not wake on “Hey Meta” — just ask in plain English.
+      </p>
       <input
         id="snap-question"
-        placeholder="Is it safe to give this dose now?"
+        placeholder="What am I looking at? (optional — blank uses this)"
       />
       <div style="height: 8px"></div>
       <div class="row">
@@ -309,6 +372,30 @@
       $("identity").value = params.get("identity") || localStorage.getItem("identity_glasses") || "kalle-glasses";
       $("room").value = params.get("room") || localStorage.getItem("room") || "liverecall-demo";
 
+      /** True only when the browser will let us call getUserMedia (secure context). */
+      function canCaptureCameraHere() {
+        try {
+          return !!(
+            navigator.mediaDevices &&
+            typeof navigator.mediaDevices.getUserMedia === "function"
+          );
+        } catch (_) {
+          return false;
+        }
+      }
+
+      (function showSecureBannerIfNeeded() {
+        const el = $("secure-banner");
+        if (!el) return;
+        if (!canCaptureCameraHere()) {
+          el.style.display = "block";
+          log(
+            "This page is not a secure camera context — use https:// (e.g. cloudflared trycloudflare) or localhost. See yellow banner above.",
+            "warn"
+          );
+        }
+      })();
+
       async function fetchToken() {
         const backend = $("backend").value.trim().replace(/\/$/, "");
         const body = {
@@ -327,8 +414,32 @@
 
       async function connect() {
         try {
+          if (!canCaptureCameraHere()) {
+            log(
+              "Cannot open camera: use https:// for this page and Backend URL (e.g. two cloudflared Quick Tunnels). Plain http:// to a LAN IP never exposes getUserMedia in Chrome/Safari.",
+              "err"
+            );
+            setStatus("need HTTPS", "err");
+            return;
+          }
           $("connect").disabled = true;
           setStatus("connecting…", "warn");
+
+          const beRaw = $("backend").value.trim();
+          const beL = beRaw.toLowerCase();
+          if (
+            location.hostname.endsWith(".trycloudflare.com") &&
+            (beL.includes("localhost") || beL.includes("127.0.0.1"))
+          ) {
+            log(
+              "Backend URL cannot be localhost on your phone — use the https URL printed by `make tunnel-backend`. Clear this field if an old value was saved.",
+              "err",
+            );
+            setStatus("set tunnel backend URL", "err");
+            $("connect").disabled = false;
+            return;
+          }
+
           const { token, url, capture_mode } = await fetchToken();
           log(`got token, url=${url}, capture_mode=${capture_mode}`, "ok");
 
@@ -340,6 +451,21 @@
             audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
             video: { facingMode: "environment", resolution: { width: 1280, height: 720 }, frameRate: 24 },
           });
+
+          // Show camera preview immediately via raw MediaStream — don't wait
+          // for the LiveKit room connection, which can be slow on mobile and
+          // would leave the preview black if anything stalls.
+          for (const t of tracks) {
+            if (t.kind === Track.Kind.Video) {
+              const preview = $("preview");
+              preview.srcObject = new MediaStream([t.mediaStreamTrack]);
+              preview.play().catch(() => {});
+              log("camera preview live", "ok");
+            }
+            if (t.kind === Track.Kind.Audio) {
+              attachMeter(t.mediaStreamTrack);
+            }
+          }
 
           const room = new Room({ adaptiveStream: true, dynacast: true });
           state.room = room;
@@ -360,12 +486,6 @@
           await room.connect(url, token);
           for (const t of tracks) {
             await room.localParticipant.publishTrack(t);
-            if (t.kind === Track.Kind.Video) {
-              t.attach($("preview"));
-            }
-            if (t.kind === Track.Kind.Audio) {
-              attachMeter(t.mediaStreamTrack);
-            }
           }
 
           localStorage.setItem("backend", $("backend").value);
@@ -429,9 +549,10 @@
           const base64 = dataUrl.split(",", 2)[1];
 
           const backend = $("backend").value.trim().replace(/\/$/, "");
+          const typed = $("snap-question").value.trim();
           const body = {
             image_b64: base64,
-            question: $("snap-question").value.trim(),
+            question: typed || "What am I looking at?",
             session_id: $("room").value.trim().replace(/^liverecall-/, "") || "demo",
             capture_mode: CAPTURE_MODE,
           };
@@ -448,9 +569,14 @@
           const visible = (j.text_visible || []).join(" · ") || "—";
           $("snap-summary").textContent = `${j.text_summary || ""}  •  visible: ${visible}  •  mode: ${j.capture_mode || "?"}`;
           if (j.question_id) {
-            log(`snap: question fired (id=${j.question_id})`, "ok");
+            log(
+              typed
+                ? `snap: question fired (id=${j.question_id})`
+                : `snap: default question sent — id=${j.question_id}`,
+              "ok",
+            );
           } else {
-            log("snap: scene captured (no question)", "ok");
+            log("snap: scene only (no question_id)", "warn");
           }
         } catch (e) {
           log(String(e), "err");

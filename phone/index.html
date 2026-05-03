@@ -113,6 +113,34 @@
       .log-line.warn { color: var(--warn); }
       .log-line.err { color: var(--err); }
 
+      .secure-banner {
+        display: none;
+        border: 1px solid rgba(251, 191, 36, 0.45);
+        background: rgba(251, 191, 36, 0.1);
+        border-radius: 14px;
+        padding: 14px;
+        font-size: 12px;
+        line-height: 1.55;
+        color: var(--text);
+      }
+      .secure-banner strong { color: var(--warn); }
+      .secure-banner code {
+        font-size: 11px;
+        background: #07090d;
+        padding: 2px 6px;
+        border-radius: 4px;
+      }
+      .secure-banner pre {
+        margin: 10px 0 0;
+        padding: 10px;
+        background: #07090d;
+        border-radius: 10px;
+        font-size: 11px;
+        overflow-x: auto;
+        white-space: pre-wrap;
+        word-break: break-all;
+      }
+
       .level {
         height: 6px;
         background: #0b0d12;
@@ -146,6 +174,18 @@
         <span id="status" class="pill">disconnected</span>
       </div>
     </header>
+
+    <div id="secure-banner" class="secure-banner" role="alert">
+      <strong>Camera / mic are blocked on this URL</strong>
+      <p style="margin: 8px 0 0">
+        Plain <code>http://</code> to a LAN IP is not a <strong>secure context</strong>, so
+        <code>navigator.mediaDevices</code> is missing — Connect will fail when opening the camera.
+        Use <code>https://</code> for both this page and the Backend URL — e.g. two
+        <a href="https://developers.cloudflare.com/cloudflare-one/connections/connect-apps/do-more-with-tunnels/trycloudflare/" target="_blank" rel="noopener">Cloudflare Quick Tunnels</a> (<code>cloudflared tunnel --url …</code>).
+      </p>
+      <pre>  cloudflared tunnel --url http://localhost:8080   → open https://….trycloudflare.com/index.html
+  cloudflared tunnel --url http://localhost:8000   → paste that https URL into Backend URL</pre>
+    </div>
 
     <div class="panel">
       <label>Backend URL</label>
@@ -229,6 +269,29 @@
       $("identity").value = params.get("identity") || localStorage.getItem("identity") || "kalle-phone";
       $("room").value = params.get("room") || localStorage.getItem("room") || "liverecall-demo";
 
+      function canCaptureCameraHere() {
+        try {
+          return !!(
+            navigator.mediaDevices &&
+            typeof navigator.mediaDevices.getUserMedia === "function"
+          );
+        } catch (_) {
+          return false;
+        }
+      }
+
+      (function showSecureBannerIfNeeded() {
+        const el = $("secure-banner");
+        if (!el) return;
+        if (!canCaptureCameraHere()) {
+          el.style.display = "block";
+          log(
+            "Not a secure camera context — use https:// (e.g. cloudflared). See yellow banner above.",
+            "warn"
+          );
+        }
+      })();
+
       async function fetchToken() {
         const backend = $("backend").value.trim().replace(/\/$/, "");
         const body = {
@@ -247,6 +310,14 @@
 
       async function connect() {
         try {
+          if (!canCaptureCameraHere()) {
+            log(
+              "Cannot open camera: use https:// for this page and Backend URL (e.g. two cloudflared Quick Tunnels). http:// + LAN IP never exposes getUserMedia in Chrome/Safari.",
+              "err"
+            );
+            setStatus("need HTTPS", "err");
+            return;
+          }
           $("connect").disabled = true;
           setStatus("connecting…", "warn");
           const { token, url } = await fetchToken();
