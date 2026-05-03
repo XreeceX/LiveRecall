@@ -7,6 +7,26 @@ explains *why* those amendments exist. Each entry is dated and labelled
 
 ---
 
+## 2026-05-03 · `phone_demo`: tunnels first, one HTTPS link with `?backend=`
+
+**Reversible.** Adds [`scripts/phone_demo.py`](./scripts/phone_demo.py) and
+`make phone-demo`. Starts two Cloudflare Quick Tunnels to `127.0.0.1:8080` and
+`:8000`, prints a single
+`https://….trycloudflare.com/glasses.html?backend=https%3A%2F%2F…` URL, then
+runs [`scripts/dev_stack.py`](./scripts/dev_stack.py). Desktop workflow stays
+`make dev-stack` + localhost only.
+
+### Why
+
+Judges and demo operators often pasted only the phone-page tunnel or left
+**Backend URL** on `localhost`, which breaks `fetch` from a real phone.
+`phone/glasses.html` already prefers `?backend=` over `localStorage`; encoding
+the API tunnel into that query param removes manual coordination. Tunnels are
+started **before** the stack so the printed link is stable before anyone opens
+the page (origins may briefly 502 until uvicorn binds — Quick Tunnel retries).
+
+---
+
 ## 2026-05-02 (g) · Two capture modes: Ray-Ban preferred, phone as universal fallback
 
 **Reversible.** Adds one shared-types literal (`CaptureMode`), one query/body
@@ -563,11 +583,12 @@ in `backend/worker.py` change.
   per LiveKit audio track, sends 16 kHz mono PCM as base64 `input_audio_chunk`
   messages, and writes `transcripts` (+ `questions` when `is_question(text)`)
   on each `committed_transcript`.
-- `class ScribeSession` replaces `class DeepgramSession`. A back-compat alias
-  `DeepgramSession = ScribeSession` lives at the bottom of `stt.py` so any
-  stale imports keep working through the swap.
+- `class ScribeSession` replaces `class DeepgramSession`. The back-compat alias
+  `DeepgramSession = ScribeSession` has since been removed from `stt.py` — all
+  references have been updated to import `ScribeSession` directly.
 - Dropped `deepgram-sdk` and `livekit-plugins-deepgram` from
-  `backend/requirements.txt`.
+  `backend/requirements.txt`. The `livekit-plugins-deepgram` entry is fully
+  removed; the package is no longer installed.
 - Dropped `DEEPGRAM_API_KEY` from `.env.example` and `backend/config.py`.
 
 ### Why

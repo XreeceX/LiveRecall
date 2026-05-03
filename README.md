@@ -58,28 +58,55 @@ apply to every capture path: mock patients only, no real PHI.
 
 ## Quickstart (≈5 min — assumes `.env` is filled in)
 
+### One-time setup
+
 ```bash
-# 1. One-time setup
 cp .env.example .env                # fill in keys, see § 1
 make install                        # venv + pip + npm
 make seed                           # load full multi-source fixtures into Atlas
+```
 
-# 2. Run the demo — three terminals
-make backend                        # FastAPI on :8000 (or your $BACKEND_PORT)
-make dashboard                      # Next.js on :3000
+### Run the stack
 
-# 3. Pick your capture path:
-# 3a. Real Ray-Bans (primary). Mirror Meta AI on the iPhone to your Mac first.
+**Desktop / laptop (simplest — no tunnels):**
+
+```bash
+make dev-stack       # or: .venv/Scripts/python.exe scripts/dev_stack.py
+```
+
+Opens API `:8000`, worker, dashboard `:3000`, phone static files `:8080`. Use `http://localhost:3000` (dashboard) and/or `http://localhost:8080/glasses.html`.
+
+**Phone camera + mic (HTTPS — one terminal):**
+
+```bash
+make phone-demo      # or: .venv/Scripts/python.exe scripts/phone_demo.py
+```
+
+Starts **both** Cloudflare Quick Tunnels (`localhost:8080` + `:8000`) **first**, prints **one** HTTPS link:
+
+`https://….trycloudflare.com/glasses.html?backend=https%3A%2F%2F…`
+
+The **backend URL is embedded** (`?backend=` — no manual paste on the phone). Then it runs the same processes as `make dev-stack`. Keep `http://localhost:3000` on the laptop for the dashboard.
+
+Requires [`cloudflared`](https://developers.cloudflare.com/cloudflare-one/connections/connect-apps/install-and-setup/installation/) (`winget install Cloudflare.cloudflared` on Windows). Set env **`CLOUDFLARED`** to the full path to `cloudflared.exe` if GNU Make cannot find it.
+
+**Manual tunnels** (two extra terminals): `make tunnel-phone` and `make tunnel-backend` — same as before if you do not use `phone_demo.py`.
+
+### Capture paths
+
+```bash
+# Real Ray-Bans (primary). Mirror Meta AI on the iPhone to your Mac first.
 make bridge-rayban-pick             # drag a rectangle over the mirror window
 # copy the REGION line, then:
 make bridge-rayban REGION=120,90,960,540 INTERVAL=3 SESSION=demo
 
-# 3b. No glasses handy? Serve the webcam stand-in page:
-make phone                          # http.server on :8080 → open phone/glasses.html
+# No glasses handy? Webcam stand-in (after dev-stack or phone-demo):
+#   Desktop: http://localhost:8080/glasses.html
+#   Phone:   use the link printed by make phone-demo
 
-# 4. Point at a metformin bottle + P-204 wristband, ask:
-#    "Is it safe to give this dose now?"
-#    → ranked references + events + grounded CKD/eGFR answer in ~15–30 s.
+# Point at a metformin bottle + P-204 wristband, ask:
+#   "Is it safe to give this dose now?"
+#   → ranked references + events + grounded CKD/eGFR answer in ~15–30 s.
 ```
 
 ---
@@ -104,6 +131,8 @@ mobile/         Native iOS + Android publishers (Meta Wearables Toolkit → Live
                 README.md                    — Mock Device Kit, signing, distribution
 dashboard/      Next.js + Tailwind judge-facing dashboard
 scripts/        seed_mongo.py           — 5 patients, 50 clinical events (TS), 3 drug references, 5 past notes
+                phone_demo.py           — Quick Tunnels (:8080+:8000) then dev_stack; one HTTPS link ?backend=…
+                dev_stack.py            — backend + worker + dashboard + phone static server (one terminal)
                 bridge_rayban_snap.py   — Meta Ray-Ban bridge: periodic screenshots → /snap (primary)
                 bridge_rayban.py        — Meta Ray-Ban bridge: pre-recorded MP4 → LiveKit (fallback)
 ```
@@ -305,8 +334,8 @@ Two pages, two capture modes, same backend:
 
 Important:
 
-- The pages ask for your backend URL on first launch — point it at the laptop IP, not `localhost`, when hitting from another device.
-- iOS Safari requires HTTPS for camera/mic on remote hosts. Easiest path: tether the phone to the laptop via hotspot and wrap your local backend in HTTPS via `[localhost.run](https://localhost.run/)` or `ngrok http 8080`.
+- **`make phone-demo`** opens `glasses.html` with **`?backend=`** preset — you normally **do not** need to edit Backend URL on the phone. For localhost desktop testing, leave the default `http://localhost:8000`. When opening from another device without query params, point Backend URL at the laptop’s tunneled API (`https://….trycloudflare.com`), never `localhost`.
+- **HTTPS for camera/mic from a phone:** Plain `http://<LAN-IP>:8080/...` is **not** a [secure context](https://developer.mozilla.org/en-US/docs/Web/Security/Secure_Contexts) — `getUserMedia` is blocked. **Easiest:** **`make phone-demo`** (tunnels first, then stack; one printed link). **Manual:** `make tunnel-phone` + `make tunnel-backend`, open `https://…/glasses.html`, paste the API tunnel into Backend URL. Install [`cloudflared`](https://developers.cloudflare.com/cloudflare-one/connections/connect-apps/do-more-with-tunnels/trycloudflare/). Ngrok’s free tier often blocks a **second** simultaneous tunnel (ERR_NGROK_334) unless you stop the first or use paid pooling.
 
 ### 4.1. Meta Ray-Ban bridge — screenshot loop (primary; Windows, macOS, Linux)
 
@@ -560,6 +589,7 @@ The dashboard sidebar lights each one up the moment it's actually exercised.
 
 | Symptom                                                       | Probable cause & fix                                                                                                                                                                                                          |
 | ------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Phone shows **failed to fetch** on Connect                          | Backend URL still `localhost` or an **old** tunnel hostname. Use **`make phone-demo`** and open **only** the printed link (includes `?backend=`). Or restart tunnels and paste **both** fresh `trycloudflare` URLs.            |
 | Bridge captures a blank / black image                    | OS denied screen capture — macOS: Screen Recording permission for the Python host app; Windows/Linux: check privacy settings or Wayland portal; retry after granting and restarting the terminal/IDE.                                                      |
 | `/snap` takes 6–10 s and objects come back empty              | Vision got an IDE screenshot / non-clinical frame. Check that the `--region` actually covers the Meta AI mirror window. Run `make bridge-rayban-pick` again to re-select.                                                     |
 | "Address already in use" when starting the backend            | A prior `python -m backend.main` is still bound. `lsof -iTCP:$BACKEND_PORT -sTCP:LISTEN` to find the PID, kill it, relaunch.                                                                                                  |
