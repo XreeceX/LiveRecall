@@ -14,6 +14,7 @@ Agents run in worker.py (separate process). This server only needs MongoDB.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from datetime import timedelta
@@ -27,7 +28,11 @@ from pydantic import BaseModel
 
 from shared.types import DEFAULT_CAPTURE_MODE, CaptureMode
 
-from .agents.vision import extract_scene
+from .agents.answerer import run_answerer_loop
+from .agents.reranker import run_reranker_loop
+from .agents.retrievers import run_retrievers_loop
+from .agents.router import run_router_loop
+from .agents.vision import extract_scene, run_vision_loop
 from .change_streams import hub, websocket_endpoint
 from .config import settings
 from .embeddings import embed
@@ -41,9 +46,25 @@ log = logging.getLogger("api")
 async def lifespan(app: FastAPI):
     await init_collections()
     await hub.start()
+    loops = [
+        asyncio.create_task(run_vision_loop(),     name="vision_loop"),
+        asyncio.create_task(run_router_loop(),     name="router_loop"),
+        asyncio.create_task(run_retrievers_loop(), name="retrievers_loop"),
+        asyncio.create_task(run_reranker_loop(),   name="reranker_loop"),
+        # audio_source_provider=None → answerer falls back to text-only
+        # (answerer.py line 144). Dashboard renders the resulting `answers`
+        # doc; LiveKit TTS round-trip is a follow-up change.
+        asyncio.create_task(
+            run_answerer_loop(audio_source_provider=None),
+            name="answerer_loop",
+        ),
+    ]
     try:
         yield
     finally:
+        for t in loops:
+            t.cancel()
+        await asyncio.gather(*loops, return_exceptions=True)
         await hub.stop()
 
 
