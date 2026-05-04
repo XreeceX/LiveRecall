@@ -1,4 +1,4 @@
-.PHONY: install backend worker seed seed-equipment purge-documents-equipment dashboard phone tunnel-phone tunnel-backend phone-demo dev-stack bridge-rayban bridge-rayban-pick bridge-rayban-mp4 clean
+.PHONY: install backend worker seed seed-equipment purge-documents-equipment dashboard phone tunnel-phone tunnel-backend phone-demo phone-demo-ngrok dev-stack bridge-rayban bridge-rayban-pick bridge-rayban-mp4 clean
 
 # Windows venv uses Scripts/; Unix uses bin/. Use the interpreter directly so
 # `make install` / `make backend` work without a POSIX-only activate path.
@@ -56,11 +56,17 @@ tunnel-phone:
 tunnel-backend:
 	$(CLOUDFLARED) tunnel --url http://localhost:8000
 
-# Phone over HTTPS in ONE terminal: starts both Quick Tunnels first, prints one
-# glasses.html URL with ?backend=… preset, then runs dev-stack. Requires cloudflared.
+# Phone over HTTPS in ONE terminal: auto prefers authenticated ngrok, then
+# Cloudflare Quick Tunnel with retries (429 backoff); see scripts/phone_demo.py --help.
+# Env: LIVE_RECALL_TUNNEL=cloudflare|ngrok|auto, LIVE_RECALL_PHONE_PUBLIC_URL +
+# LIVE_RECALL_API_PUBLIC_URL to skip tunnels (you run cloudflared/ngrok yourself).
+# Force ngrok only (two tunnels): `make phone-demo-ngrok` (needs ngrok authtoken).
 # Desktop/laptop: use `make dev-stack` only (localhost — no tunnels).
 phone-demo:
 	"$(VENV_PYTHON)" scripts/phone_demo.py
+
+phone-demo-ngrok:
+	"$(VENV_PYTHON)" scripts/phone_demo.py --tunnel ngrok
 
 # One terminal: API + worker + dashboard + phone static server (Ctrl+C kills all).
 # Requires the same Python you use for backend (e.g. conda). Tunnels are separate.

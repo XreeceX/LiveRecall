@@ -467,7 +467,10 @@ Terminal B (with `make backend` on :8000):
             }
           }
 
-          const room = new Room({ adaptiveStream: true, dynacast: true });
+          const room = new Room({
+            adaptiveStream: true,
+            dynacast: false,
+          });
           state.room = room;
 
           room.on(RoomEvent.ConnectionStateChanged, (s) => {

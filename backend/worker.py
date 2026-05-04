@@ -49,6 +49,11 @@ log = logging.getLogger("worker")
 # session_id -> (room, audio_source) so the Answerer loop can publish back
 ROOM_REGISTRY: dict[str, dict[str, Any]] = {}
 
+# At most one STT consumer per session — duplicate track_subscribed happens on some mobile reconnects.
+_AUDIO_PIPE_TASKS: dict[str, asyncio.Task[None]] = {}
+# Same for video sampler (bootstrap loop + events can both fire).
+_VIDEO_PIPE_TASKS: dict[str, asyncio.Task[None]] = {}
+
 # Latest sampled JPEG for each session — updated in memory at frame_sample_hz
 # but NOT written to DB until a question is committed by STT.
 # Tuple: (base64_jpeg, width_px, height_px)
@@ -91,37 +96,117 @@ async def entrypoint(ctx: JobContext) -> None:
     ROOM_REGISTRY[session_id] = {"room": room, "audio_source": audio_source}
 
     # --- Subscribe handlers --------------------------------------------------
+    def _ensure_remote_subscribed(pub: rtc.RemoteTrackPublication) -> None:
+        """Mobile + dynacast can publish before our subscribe completes; nudge explicitly."""
+        try:
+            pub.set_subscribed(True)
+        except Exception as e:  # noqa: BLE001
+            log.warning("set_subscribed failed (session=%s): %s", session_id, e)
+
+    @room.on("participant_connected")
+    def _on_participant_connected(participant: rtc.RemoteParticipant) -> None:
+        log.info(
+            "remote participant connected identity=%s kind=%s (session=%s)",
+            participant.identity,
+            participant.kind,
+            session_id,
+        )
+        for pub in participant.track_publications.values():
+            _ensure_remote_subscribed(pub)
+
+    @room.on("track_published")
+    def _on_track_published(pub: rtc.RemoteTrackPublication, _participant: rtc.RemoteParticipant) -> None:
+        _ensure_remote_subscribed(pub)
+
     @room.on("track_subscribed")
     def _on_track(track: rtc.Track, _pub, _participant) -> None:
         if track.kind == rtc.TrackKind.KIND_AUDIO:
-            asyncio.create_task(_consume_audio(track, session_id))
-        elif track.kind == rtc.TrackKind.KIND_VIDEO:
-            asyncio.create_task(_sample_video_to_cache(track, session_id))
+            prev = _AUDIO_PIPE_TASKS.get(session_id)
+            if prev is not None and not prev.done():
+                log.warning(
+                    "duplicate audio track_subscribed ignored (session=%s); "
+                    "already running STT pipeline",
+                    session_id,
+                )
+                return
 
-    # Tracks already published before the handler was attached.
+            async def _run_audio() -> None:
+                await _consume_audio(track, session_id)
+
+            t = asyncio.create_task(_run_audio(), name=f"stt-{session_id}")
+
+            def _drop_audio_task(done: asyncio.Task[None]) -> None:
+                if _AUDIO_PIPE_TASKS.get(session_id) is done:
+                    _AUDIO_PIPE_TASKS.pop(session_id, None)
+
+            t.add_done_callback(_drop_audio_task)
+            _AUDIO_PIPE_TASKS[session_id] = t
+        elif track.kind == rtc.TrackKind.KIND_VIDEO:
+            prev_v = _VIDEO_PIPE_TASKS.get(session_id)
+            if prev_v is not None and not prev_v.done():
+                log.warning(
+                    "duplicate video track_subscribed ignored (session=%s); sampler already running",
+                    session_id,
+                )
+                return
+
+            async def _run_video() -> None:
+                try:
+                    await _sample_video_to_cache(track, session_id)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    log.exception("video sampler exited with error (session=%s)", session_id)
+
+            vt = asyncio.create_task(_run_video(), name=f"video-{session_id}")
+
+            def _drop_video_task(done: asyncio.Task[None]) -> None:
+                if _VIDEO_PIPE_TASKS.get(session_id) is done:
+                    _VIDEO_PIPE_TASKS.pop(session_id, None)
+
+            vt.add_done_callback(_drop_video_task)
+            _VIDEO_PIPE_TASKS[session_id] = vt
+
+    # Tracks already published — force subscribe then attach if media is already flowing.
     for participant in room.remote_participants.values():
         for pub in participant.track_publications.values():
+            _ensure_remote_subscribed(pub)
             if pub.track:
                 _on_track(pub.track, pub, participant)
+
+    try:
+        await ctx.wait_for_participant()
+        log.info("publisher participant ready (session=%s)", session_id)
+    except Exception as e:  # noqa: BLE001
+        log.warning("wait_for_participant: %s — continuing for session=%s", e, session_id)
 
     await asyncio.Future()  # keep the worker running until the room ends.
 
 
 async def _consume_audio(track: rtc.Track, session_id: str) -> None:
     log.info("audio track subscribed (session=%s)", session_id)
-    stt = ScribeSession(
-        session_id=session_id,
-        on_question=lambda qdoc: _flush_frame_on_question(session_id, qdoc),
-    )
-    await stt.start()
     try:
-        astream = rtc.AudioStream(track)
-        async for ev in astream:
-            frame: rtc.AudioFrame = ev.frame
-            pcm = _to_16k_mono(frame, stt.sample_rate)
-            await stt.send(pcm)
-    finally:
-        await stt.close()
+        stt = ScribeSession(
+            session_id=session_id,
+            on_question=lambda qdoc: _flush_frame_on_question(session_id, qdoc),
+        )
+        await stt.start()
+        try:
+            astream = rtc.AudioStream(track)
+            async for ev in astream:
+                frame: rtc.AudioFrame = ev.frame
+                pcm = _to_16k_mono(frame, stt.sample_rate)
+                await stt.send(pcm)
+        finally:
+            await stt.close()
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        log.exception(
+            "audio/STT pipeline crashed (session=%s). "
+            "Check ELEVENLABS_API_KEY and network; transcripts will not reach Mongo.",
+            session_id,
+        )
 
 
 def _to_16k_mono(frame: rtc.AudioFrame, target_rate: int) -> bytes:

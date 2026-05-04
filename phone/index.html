@@ -89,12 +89,56 @@
       .btn-secondary { background: #1f2937; color: var(--text); }
       .btn-danger { background: rgba(248, 113, 113, 0.2); color: var(--err); }
 
-      video {
+      /* Small picture-in-picture style preview — shows local camera as soon as tracks exist,
+         without waiting for LiveKit (connect can be slow on cellular). */
+      .pov-pip {
+        position: relative;
+        align-self: flex-end;
+        width: min(132px, 32vw);
+        aspect-ratio: 3 / 4;
+        border-radius: 14px;
+        overflow: hidden;
+        background: #07090d;
+        border: 1px solid rgba(110, 231, 183, 0.35);
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+      }
+      .pov-pip video {
         width: 100%;
-        max-height: 36vh;
-        border-radius: 12px;
-        background: #000;
+        height: 100%;
         object-fit: cover;
+        display: block;
+      }
+      .pov-pip-label {
+        position: absolute;
+        top: 6px;
+        left: 6px;
+        z-index: 1;
+        font-size: 9px;
+        letter-spacing: 0.65px;
+        text-transform: uppercase;
+        color: var(--accent);
+        background: rgba(11, 13, 18, 0.72);
+        padding: 3px 7px;
+        border-radius: 6px;
+        border: 1px solid rgba(110, 231, 183, 0.35);
+        pointer-events: none;
+      }
+      .pov-pip.pov-pip--idle::after {
+        content: "Camera preview after Connect";
+        position: absolute;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        text-align: center;
+        padding: 10px;
+        font-size: 11px;
+        line-height: 1.35;
+        color: var(--muted);
+        pointer-events: none;
+      }
+      .pov-pip.pov-pip--live::after {
+        display: none;
       }
 
       #log {
@@ -203,7 +247,10 @@
       </div>
     </div>
 
-    <video id="preview" autoplay playsinline muted></video>
+    <div id="pov-pip" class="pov-pip pov-pip--idle" aria-label="Live camera preview">
+      <span class="pov-pip-label">Live POV</span>
+      <video id="preview" autoplay playsinline muted></video>
+    </div>
 
     <div class="level"><span id="meter"></span></div>
 
@@ -328,7 +375,27 @@
             video: { facingMode: "environment", resolution: { width: 640, height: 480 }, frameRate: 24 },
           });
 
-          const room = new Room({ adaptiveStream: true, dynacast: true });
+          // Bind preview immediately — don't wait for room.connect (often slow on mobile).
+          for (const t of tracks) {
+            if (t.kind === Track.Kind.Video) {
+              const preview = $("preview");
+              preview.srcObject = new MediaStream([t.mediaStreamTrack]);
+              preview.play().catch(() => {});
+              $("pov-pip").classList.remove("pov-pip--idle");
+              $("pov-pip").classList.add("pov-pip--live");
+              log("camera POV preview live", "ok");
+            }
+            if (t.kind === Track.Kind.Audio) {
+              attachMeter(t.mediaStreamTrack);
+            }
+          }
+
+          const room = new Room({
+            adaptiveStream: true,
+            // dynacast off: mobile browsers sometimes publish tracks before SFU layers
+            // negotiate; without a subscriber the worker can miss the first subscription window.
+            dynacast: false,
+          });
           state.room = room;
 
           room.on(RoomEvent.ConnectionStateChanged, (s) => {
@@ -353,12 +420,6 @@
           await room.connect(url, token);
           for (const t of tracks) {
             await room.localParticipant.publishTrack(t);
-            if (t.kind === Track.Kind.Video) {
-              t.attach($("preview"));
-            }
-            if (t.kind === Track.Kind.Audio) {
-              attachMeter(t.mediaStreamTrack);
-            }
           }
 
           localStorage.setItem("backend", $("backend").value);
@@ -371,13 +432,32 @@
           log(String(e), "err");
           setStatus("error", "err");
           $("connect").disabled = false;
+          try {
+            if (state.room) await state.room.disconnect();
+          } catch (_) {}
+          state.room = null;
+          stopLocalPreview();
         }
       }
 
+      function stopLocalPreview() {
+        const pv = $("preview");
+        try {
+          const ms = pv.srcObject;
+          if (ms && ms.getTracks) ms.getTracks().forEach((tr) => tr.stop());
+        } catch (_) {}
+        pv.srcObject = null;
+        const pip = $("pov-pip");
+        pip.classList.remove("pov-pip--live");
+        pip.classList.add("pov-pip--idle");
+      }
+
       async function disconnect() {
-        if (!state.room) return;
-        await state.room.disconnect();
+        try {
+          if (state.room) await state.room.disconnect();
+        } catch (_) {}
         state.room = null;
+        stopLocalPreview();
         $("disconnect").disabled = true;
         $("connect").disabled = false;
         setStatus("disconnected");
