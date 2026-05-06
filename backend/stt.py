@@ -96,6 +96,7 @@ class ScribeSession:
             }))
         except websockets.ConnectionClosed:
             self._closed = True
+            raise  # propagate so _consume_audio exits and the task slot is freed
 
     async def close(self) -> None:
         self._closed = True

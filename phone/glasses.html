@@ -369,8 +369,9 @@ Terminal B (with `make backend` on :8000):
 
       const params = new URLSearchParams(location.search);
       $("backend").value = params.get("backend") || localStorage.getItem("backend") || "http://localhost:8000";
-      $("identity").value = params.get("identity") || localStorage.getItem("identity_glasses") || "kalle-glasses";
-      $("room").value = params.get("room") || localStorage.getItem("room") || "liverecall-demo";
+      const _defaultId = "glasses-" + Math.random().toString(36).slice(2, 7);
+      $("identity").value = params.get("identity") || _defaultId;
+      $("room").value = params.get("room") || "liverecall-demo";
 
       /** True only when the browser will let us call getUserMedia (secure context). */
       function canCaptureCameraHere() {
@@ -493,7 +494,6 @@ Terminal B (with `make backend` on :8000):
 
           localStorage.setItem("backend", $("backend").value);
           localStorage.setItem("identity_glasses", $("identity").value);
-          localStorage.setItem("room", $("room").value);
 
           $("disconnect").disabled = false;
           log("connected · publishing audio + first-person video", "ok");

@@ -114,6 +114,20 @@ async def entrypoint(ctx: JobContext) -> None:
         for pub in participant.track_publications.values():
             _ensure_remote_subscribed(pub)
 
+    @room.on("participant_disconnected")
+    def _on_participant_disconnected(participant: rtc.RemoteParticipant) -> None:
+        log.info(
+            "participant disconnected identity=%s (session=%s) — cancelling STT/video tasks",
+            participant.identity,
+            session_id,
+        )
+        audio_task = _AUDIO_PIPE_TASKS.pop(session_id, None)
+        if audio_task and not audio_task.done():
+            audio_task.cancel()
+        video_task = _VIDEO_PIPE_TASKS.pop(session_id, None)
+        if video_task and not video_task.done():
+            video_task.cancel()
+
     @room.on("track_published")
     def _on_track_published(pub: rtc.RemoteTrackPublication, _participant: rtc.RemoteParticipant) -> None:
         _ensure_remote_subscribed(pub)
@@ -201,12 +215,16 @@ async def _consume_audio(track: rtc.Track, session_id: str) -> None:
             await stt.close()
     except asyncio.CancelledError:
         raise
-    except Exception:
-        log.exception(
-            "audio/STT pipeline crashed (session=%s). "
-            "Check ELEVENLABS_API_KEY and network; transcripts will not reach Mongo.",
-            session_id,
-        )
+    except Exception as exc:
+        import websockets as _ws
+        if isinstance(exc, _ws.ConnectionClosed):
+            log.warning("scribe WS closed — STT task exiting so reconnect can start fresh (session=%s)", session_id)
+        else:
+            log.exception(
+                "audio/STT pipeline crashed (session=%s). "
+                "Check ELEVENLABS_API_KEY and network; transcripts will not reach Mongo.",
+                session_id,
+            )
 
 
 def _to_16k_mono(frame: rtc.AudioFrame, target_rate: int) -> bytes:
@@ -317,7 +335,7 @@ def _session_id_from_room(room_name: str) -> str:
 
 
 def main() -> None:
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
+    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint, agent_name="liverecall"))
 
 
 if __name__ == "__main__":

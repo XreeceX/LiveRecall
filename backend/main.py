@@ -22,7 +22,7 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
-from livekit.api import AccessToken, VideoGrants
+from livekit.api import AccessToken, CreateAgentDispatchRequest, DeleteRoomRequest, LiveKitAPI, VideoGrants
 from pydantic import BaseModel
 
 
@@ -172,6 +172,24 @@ async def token(req: TokenReq) -> TokenResp:
         },
         upsert=True,
     )
+    # Delete any stale room so the worker isn't stuck in an old session,
+    # then dispatch fresh. Deletion is a no-op if the room doesn't exist yet.
+    try:
+        async with LiveKitAPI(
+            url=settings.livekit_url,
+            api_key=settings.livekit_api_key,
+            api_secret=settings.livekit_api_secret,
+        ) as lk:
+            try:
+                await lk.room.delete_room(DeleteRoomRequest(room=req.room))
+            except Exception:  # noqa: BLE001
+                pass  # room didn't exist, that's fine
+            await lk.agent_dispatch.create_dispatch(
+                CreateAgentDispatchRequest(agent_name="liverecall", room=req.room)
+            )
+    except Exception as e:  # noqa: BLE001
+        log.warning("agent dispatch failed (non-fatal): %s", e)
+
     return TokenResp(
         token=at.to_jwt(),
         url=settings.livekit_url,

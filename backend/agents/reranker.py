@@ -107,7 +107,7 @@ def _llm(*, max_tokens: int = 700) -> ChatOpenAI:
         temperature=0,
         max_tokens=max_tokens,
         api_key=settings.openai_api_key,
-        timeout=5,
+        timeout=30,
     )
 
 
