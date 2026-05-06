@@ -33,23 +33,30 @@ Both apps follow the same shape:
 | Layer | iOS | Android |
 |---|---|---|
 | User config (backend URL, identity, room) | `AppConfig` (UserDefaults) | `AppConfig` (DataStore) |
-| /token call | `BackendClient` | `BackendClient` |
-| Wearables wrapper | `WearablesController` (stub w/ `USE_WEARABLES_SDK`) | `GlassesController` (stub w/ `USE_WEARABLES_SDK`) |
+| /token + /snap call | `BackendClient` | `BackendClient` |
+| Wearables wrapper | `WearablesController` (real DAT) | `GlassesController` (stub w/ `USE_WEARABLES_SDK`) |
 | LiveKit publisher | `LiveKitController` (BufferCapturer) | `PublisherController` (`GlassesVideoCapturer`) |
 | Orchestrator | `SessionController` | `SessionController` |
 | UI | SwiftUI: `ContentView` + Views/* | Compose: `ConnectScreen` + components/* |
 
-The Wearables SDK call sites are stubbed by default so the app builds and
-publishes the **phone camera** without any Meta credentials, which makes it
-straightforward to verify the LiveKit half end-to-end first.
+**iOS** is wired against the real Meta DAT (open-source SPM package at
+`https://github.com/facebook/meta-wearables-dat-ios`); only the per-developer
+`MetaAppID` / `ClientToken` from the Wearables Dev Center need to land in
+`Info.plist`. There's also a phone-camera fallback in `LiveKitController`
+that kicks in automatically when DAT can't bring up the glasses stream
+within ~4 s, so the LiveKit half is still verifiable on day one.
+
+**Android** still has the Wearables SDK call sites stubbed behind
+`USE_WEARABLES_SDK = false` and falls back to the phone camera.
 
 ---
 
 ## Prerequisites
 
-- **Approved Meta Wearables Dev Center project.** Grab `MetaAppID` /
-  `ClientToken` (and the SDK package URL/credentials) from
-  https://wearables.developer.meta.com/.
+- **Approved Meta Wearables Dev Center project** for `MetaAppID` /
+  `ClientToken` (https://wearables.developer.meta.com/). The SDK itself is
+  public on GitHub now — only these two per-developer values need to land
+  in `Info.plist` (iOS) / `build.gradle.kts` (Android).
 - **Apple Developer account** for iOS (TestFlight / device install).
 - **Android Studio Hedgehog or newer** + an Android 10+ device.
 - A running LiveRecall backend (`make backend && make worker && make
@@ -70,34 +77,34 @@ straightforward to verify the LiveKit half end-to-end first.
    Swift package + the WearablesDAT package by hand. The rest of this
    section still applies.)*
 
-2. Open `LiveRecallGlasses/Resources/Info.plist` and replace every
-   `REPLACE_ME_*` value:
+2. Open `LiveRecallGlasses/Resources/Info.plist` and fill in the four
+   `REPLACE_ME_*` values inside the `MWDAT` dict (and only inside it — DAT
+   reads them from there at `Wearables.configure()` time):
    - `MetaAppID` — from Wearables Dev Center.
    - `ClientToken` — from Wearables Dev Center.
    - `TeamID` — your Apple Developer team identifier.
-   - `AppLinkURLScheme` — keep `liverecallglasses` unless you want to
+   - `AppLinkURLScheme` — keep `liverecallglasses://` unless you want to
      register a different URL scheme; if you change it, update the matching
-     entry under `CFBundleURLTypes`.
+     entry under `CFBundleURLTypes` (the scheme string there does NOT
+     include the `://`).
 
-3. (Once your Wearables Dev Center project is approved) edit
-   `project.yml` and uncomment the `WearablesDAT` entry under `packages:`
-   plus the matching `dependencies:` entry. Use the package URL Meta
-   provides for your account.
-
-4. Generate and open the project:
+3. Generate and open the project:
    ```bash
    cd LiveRecall/mobile/ios/LiveRecallGlasses
    xcodegen generate
    open LiveRecallGlasses.xcodeproj
    ```
+   The `meta-wearables-dat-ios` Swift package (public on GitHub) is already
+   declared in `project.yml`; first build will fetch and resolve it via SPM.
 
-5. In `Signing & Capabilities`, pick your team. Bundle id defaults to
-   `com.liverecall.glasses` — change if you already use that id.
+4. In `Signing & Capabilities`, pick your team. Bundle id defaults to
+   `com.liverecall.glasses` — change if you already use that id, and update
+   `DEVELOPMENT_TEAM` in `project.yml`.
 
-6. Flip `USE_WEARABLES_SDK` in `WearablesController.swift` to `true` once
-   the Swift package is linked, and replace the TODO bodies with the real
-   toolkit calls (`WearablesToolkit.shared.devicesStream()`,
-   `session.addStream(config:)`, `stream.videoFramePublisher.listen`).
+5. *(optional, only if you can't link the SPM package for some reason)*
+   Flip `USE_WEARABLES_SDK = false` in `WearablesController.swift`. The app
+   will still build and run against the phone-camera fallback, just without
+   any glasses involvement.
 
 ### Run
 
@@ -221,6 +228,12 @@ host. For an actual phone:
    - `scene_context` rows start landing as the worker samples frames.
    - The on-phone log shows `livekit: subscribed audio from worker-...` once
      the agent's TTS track is published — that's the answer playback.
+6. **Snap & ask** (iOS only, glasses required): with the glasses streaming,
+   point at the demo pill bottle, type `is it safe to give this dose?` in
+   the Snap & ask field, tap **Snap & ask**. The on-phone log shows
+   `snap: captured … bytes from glasses` followed by `snap: ok — saw …`,
+   the dashboard reasoning trace lights up for the new `q_…` id, and the
+   spoken answer streams back through the existing LiveKit audio track.
 
 ## Troubleshooting
 

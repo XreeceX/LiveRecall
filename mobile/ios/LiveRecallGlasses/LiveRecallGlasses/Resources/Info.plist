@@ -2,17 +2,29 @@
 <!--
   Info.plist for LiveRecallGlasses.
 
-  Replace every REPLACE_ME_* value below with the credentials from your
-  approved Meta Wearables Dev Center project AND your Apple Developer team.
+  Per the Meta Wearables DAT iOS guide, the four DAT-config values live
+  inside a single top-level <MWDAT> dict. Replace every REPLACE_ME_* value
+  below with the credentials from your approved Meta Wearables Dev Center
+  project AND your Apple Developer team.
 
-  Keys you'll touch:
-    AppLinkURLScheme  - the URL scheme the Meta AI app uses to call back
-                        into this app during Wearables registration.
+  Keys you'll touch (all inside the MWDAT dict):
+    AppLinkURLScheme  - URL scheme the Meta AI app uses to call back into
+                        this app during Wearables registration. MUST end
+                        with "://" — DAT compares strings literally.
     MetaAppID         - your project ID from Wearables Dev Center.
     ClientToken       - the client token from Wearables Dev Center.
-    TeamID            - your Apple Developer team identifier.
-    CFBundleURLTypes  - register the same URL scheme so iOS routes
-                        wearables registration callbacks back to this app.
+    TeamID            - your Apple Developer team identifier (must match
+                        the DEVELOPMENT_TEAM in project.yml / Xcode).
+
+  Other DAT-required top-level keys:
+    UISupportedExternalAccessoryProtocols - DAT talks to the glasses over
+                        Apple's ExternalAccessory framework. Without this
+                        protocol declaration iOS hides the device.
+    UIBackgroundModes - "external-accessory" lets the BT pipe survive
+                        backgrounding; "bluetooth-peripheral" is the
+                        partner mode for the BLE side.
+    CFBundleURLTypes  - registers our URL scheme with iOS so the Meta AI
+                        app's callback actually deep-links back to us.
 
   See: https://wearables.developer.meta.com/docs/build-integration-ios/
 -->
@@ -58,7 +70,7 @@
 
     <!-- Permission strings (required for camera + mic + bluetooth + LAN). -->
     <key>NSCameraUsageDescription</key>
-    <string>LiveRecall uses the phone camera as a fallback when the glasses are not connected, so you can frame the bedside scene.</string>
+    <string>LiveRecall streams the Ray-Ban Meta camera (or, as a fallback, the phone camera) so the clinician can frame the bedside scene.</string>
     <key>NSMicrophoneUsageDescription</key>
     <string>LiveRecall captures audio so a clinician can ask questions during a session.</string>
     <key>NSBluetoothAlwaysUsageDescription</key>
@@ -68,21 +80,54 @@
     <key>NSLocalNetworkUsageDescription</key>
     <string>LiveRecall connects to your LiveRecall backend over the local network for low-latency token exchange.</string>
 
-    <!-- Meta Wearables Device Access Toolkit registration. -->
-    <key>AppLinkURLScheme</key>
-    <string>liverecallglasses</string>
-    <key>MetaAppID</key>
-    <string>REPLACE_ME_META_APP_ID</string>
-    <key>ClientToken</key>
-    <string>REPLACE_ME_CLIENT_TOKEN</string>
-    <key>TeamID</key>
-    <string>REPLACE_ME_APPLE_TEAM_ID</string>
+    <!-- Meta Wearables Device Access Toolkit registration.
 
+         All four values must live inside a single MWDAT dict per the
+         current iOS integration guide. The toolkit reads this dict at
+         Wearables.configure() time and uses it for app attestation. -->
+    <key>MWDAT</key>
+    <dict>
+        <key>AppLinkURLScheme</key>
+        <string>liverecallglasses://</string>
+        <key>MetaAppID</key>
+        <string>1747056186676020</string>
+        <key>ClientToken</key>
+        <string>AR|1747056186676020|e497d4fadf0f76f31bd22055db5fdc63</string>
+        <!-- $(DEVELOPMENT_TEAM) is substituted at build time from the
+             Xcode project's signing config. Set DEVELOPMENT_TEAM in
+             project.yml (or Xcode → Signing & Capabilities → Team) to
+             your 10-char Apple Developer Team ID. Matches the canonical
+             example at wearables.developer.meta.com/docs/build-integration-ios. -->
+        <key>TeamID</key>
+        <string>$(DEVELOPMENT_TEAM)</string>
+    </dict>
+
+    <!-- DAT communicates with the glasses through Apple's ExternalAccessory
+         framework. Declaring the protocol is what makes iOS surface the
+         device to our process. -->
+    <key>UISupportedExternalAccessoryProtocols</key>
+    <array>
+        <string>com.meta.ar.wearable</string>
+    </array>
+
+    <!-- Background modes so the BT pipe survives backgrounding (e.g. when
+         the user puts the phone in their pocket during a session). -->
+    <key>UIBackgroundModes</key>
+    <array>
+        <string>bluetooth-peripheral</string>
+        <string>external-accessory</string>
+    </array>
+
+    <!-- Register our URL scheme with iOS so the Meta AI app can deep-link
+         back here after registration / permission prompts. The scheme name
+         must match the AppLinkURLScheme value above (without the "://"). -->
     <key>CFBundleURLTypes</key>
     <array>
         <dict>
             <key>CFBundleURLName</key>
             <string>com.liverecall.glasses.metawearables</string>
+            <key>CFBundleTypeRole</key>
+            <string>Editor</string>
             <key>CFBundleURLSchemes</key>
             <array>
                 <string>liverecallglasses</string>

@@ -23,19 +23,24 @@ options:
 # ---------------------------------------------------------------------------
 # Swift Package dependencies.
 #
-# LiveKit's Swift client SDK is public on GitHub and pulls cleanly via SPM.
-# The Meta Wearables Device Access Toolkit ships as a Swift Package too,
-# but the URL/version comes from your approved developer account at
-# https://wearables.developer.meta.com/. Uncomment the WearablesDAT block
-# once you've grabbed the package URL from the Wearables Dev Center.
+# Both packages are public on GitHub:
+#   - LiveKit's Swift client SDK is the WebRTC publisher we use to push the
+#     glasses POV video + phone mic into the LiveRecall LiveKit room.
+#   - meta-wearables-dat-ios is Meta's open-source Wearables Device Access
+#     Toolkit — DAT for short. The package itself pulls without credentials;
+#     what does need credentials are the per-developer MetaAppID and
+#     ClientToken in Info.plist (grab those from the Wearables Dev Center at
+#     https://wearables.developer.meta.com/). MWDATCore + MWDATCamera are
+#     the two products we need: Core for registration / sessions, Camera for
+#     the video stream + still-photo capture used by the Snap & ask path.
 # ---------------------------------------------------------------------------
 packages:
   LiveKit:
     url: https://github.com/livekit/client-sdk-swift
     from: "2.0.0"
-  # WearablesDAT:
-  #   url: https://wearables.developer.meta.com/.../wearables-dat-ios
-  #   from: "0.3.0"
+  WearablesDAT:
+    url: https://github.com/facebook/meta-wearables-dat-ios
+    from: "0.6.0"
 
 targets:
   LiveRecallGlasses:
@@ -50,9 +55,11 @@ targets:
         INFOPLIST_FILE: LiveRecallGlasses/Resources/Info.plist
         ENABLE_USER_SCRIPT_SANDBOXING: NO
         SWIFT_VERSION: "5.9"
-        DEVELOPMENT_TEAM: "REPLACE_ME_APPLE_TEAM_ID"
+        DEVELOPMENT_TEAM: "A65HN768M8"
     dependencies:
       - package: LiveKit
         product: LiveKit
-      # - package: WearablesDAT
-      #   product: WearablesDAT
+      - package: WearablesDAT
+        product: MWDATCore
+      - package: WearablesDAT
+        product: MWDATCamera

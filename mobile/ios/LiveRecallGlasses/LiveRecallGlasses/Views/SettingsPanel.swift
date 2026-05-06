@@ -25,12 +25,12 @@ struct SettingsPanel: View {
 
             Toggle(isOn: $config.preferGlasses) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Use Ray-Ban Meta as source")
+                    Text("Try Ray-Ban Meta glasses (experimental)")
                         .font(.system(size: 13, weight: .medium))
                         .foregroundColor(Theme.text)
                     Text(config.preferGlasses
-                         ? "Toolkit + paired glasses (or Mock Device Kit)"
-                         : "Phone camera (fallback while toolkit is unwired)")
+                         ? "Will try DAT first, fall back to phone camera if devices don't enumerate within 15s"
+                         : "Phone camera only — recommended for the demo (no DAT round-trip)")
                         .font(.system(size: 11))
                         .foregroundColor(Theme.muted)
                 }

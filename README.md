@@ -34,13 +34,13 @@ Atlas** is the substrate, **LiveKit Cloud** is the transport.
 **Capture devices** — parallel entry points, same Vision pipeline:
 
 
-| Mode                                      | Entry point                                                                          | When to use it                                                                                              |
-| ----------------------------------------- | ------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------- |
-| 🕶️ **Meta Ray-Ban v2 (POV, headline)**   | `[scripts/bridge_rayban_snap.py](./scripts/bridge_rayban_snap.py)` → `/snap`         | Real glasses. Mirror the Meta AI iPhone app to Mac, screenshot every 3 s. Deterministic, Path A. See § 4.1. |
-| 🎬 **Ray-Ban pre-recorded replay**        | `[scripts/bridge_rayban.py](./scripts/bridge_rayban.py)` → LiveKit room as `glasses` | Publish a recorded Ray-Ban MP4 into the demo room for a fully-deterministic walkthrough. See § 4.2.         |
+| Mode                                      | Entry point                                                                                  | When to use it                                                                                              |
+| ----------------------------------------- | -------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| 🕶️ **Meta Ray-Ban v2 (POV, headline)**   | `[scripts/bridge_rayban_snap.py](./scripts/bridge_rayban_snap.py)` → `/snap`                 | Real glasses. Mirror the Meta AI iPhone app to Mac, screenshot every 3 s. Deterministic, Path A. See § 4.1. |
+| 🎬 **Ray-Ban pre-recorded replay**        | `[scripts/bridge_rayban.py](./scripts/bridge_rayban.py)` → LiveKit room as `glasses`         | Publish a recorded Ray-Ban MP4 into the demo room for a fully-deterministic walkthrough. See § 4.2.         |
 | 📲 **Native iOS / Android publisher**     | `[mobile/](./mobile)` — Wearables Device Access Toolkit → LiveKit (`capture_mode="glasses"`) | Real glasses streaming live into LiveKit through a phone (no screen-mirror). See `mobile/README.md`.        |
-| 🧪 **Webcam stand-in**                    | `[phone/glasses.html](./phone/glasses.html)` — `capture_mode="glasses"`              | Laptop webcam / phone in a head strap when the real glasses aren't around. Zero setup.                      |
-| 📱 **Phone browser (universal fallback)** | `[phone/index.html](./phone/index.html)` — `capture_mode="phone"`                    | Day-1 adoption: every clinician on shift already has one, no hardware purchase needed.                      |
+| 🧪 **Webcam stand-in**                    | `[phone/glasses.html](./phone/glasses.html)` — `capture_mode="glasses"`                      | Laptop webcam / phone in a head strap when the real glasses aren't around. Zero setup.                      |
+| 📱 **Phone browser (universal fallback)** | `[phone/index.html](./phone/index.html)` — `capture_mode="phone"`                            | Day-1 adoption: every clinician on shift already has one, no hardware purchase needed.                      |
 
 
 All five paths converge on the same Vision prompt (POV hint flips on
@@ -88,7 +88,7 @@ Starts **both** Cloudflare Quick Tunnels (`localhost:8080` + `:8000`) **first**,
 
 The **backend URL is embedded** (`?backend=` — no manual paste on the phone). Then it runs the same processes as `make dev-stack`. Keep `http://localhost:3000` on the laptop for the dashboard.
 
-Requires [`cloudflared`](https://developers.cloudflare.com/cloudflare-one/connections/connect-apps/install-and-setup/installation/) (`winget install Cloudflare.cloudflared` on Windows). Set env **`CLOUDFLARED`** to the full path to `cloudflared.exe` if GNU Make cannot find it.
+Requires `[cloudflared](https://developers.cloudflare.com/cloudflare-one/connections/connect-apps/install-and-setup/installation/)` (`winget install Cloudflare.cloudflared` on Windows). Set env `**CLOUDFLARED`** to the full path to `cloudflared.exe` if GNU Make cannot find it.
 
 **Manual tunnels** (two extra terminals): `make tunnel-phone` and `make tunnel-backend` — same as before if you do not use `phone_demo.py`.
 
@@ -334,13 +334,13 @@ Two pages, two capture modes, same backend:
 
 Important:
 
-- **`make phone-demo`** opens `glasses.html` with **`?backend=`** preset — you normally **do not** need to edit Backend URL on the phone. For localhost desktop testing, leave the default `http://localhost:8000`. When opening from another device without query params, point Backend URL at the laptop’s tunneled API (`https://….trycloudflare.com`), never `localhost`.
-- **HTTPS for camera/mic from a phone:** Plain `http://<LAN-IP>:8080/...` is **not** a [secure context](https://developer.mozilla.org/en-US/docs/Web/Security/Secure_Contexts) — `getUserMedia` is blocked. **Easiest:** **`make phone-demo`** (tunnels first, then stack; one printed link). **Manual:** `make tunnel-phone` + `make tunnel-backend`, open `https://…/glasses.html`, paste the API tunnel into Backend URL. Install [`cloudflared`](https://developers.cloudflare.com/cloudflare-one/connections/connect-apps/do-more-with-tunnels/trycloudflare/). Ngrok’s free tier often blocks a **second** simultaneous tunnel (ERR_NGROK_334) unless you stop the first or use paid pooling.
+- `**make phone-demo`** opens `glasses.html` with `**?backend=**` preset — you normally **do not** need to edit Backend URL on the phone. For localhost desktop testing, leave the default `http://localhost:8000`. When opening from another device without query params, point Backend URL at the laptop’s tunneled API (`https://….trycloudflare.com`), never `localhost`.
+- **HTTPS for camera/mic from a phone:** Plain `http://<LAN-IP>:8080/...` is **not** a [secure context](https://developer.mozilla.org/en-US/docs/Web/Security/Secure_Contexts) — `getUserMedia` is blocked. **Easiest:** `**make phone-demo`** (tunnels first, then stack; one printed link). **Manual:** `make tunnel-phone` + `make tunnel-backend`, open `https://…/glasses.html`, paste the API tunnel into Backend URL. Install `[cloudflared](https://developers.cloudflare.com/cloudflare-one/connections/connect-apps/do-more-with-tunnels/trycloudflare/)`. Ngrok’s free tier often blocks a **second** simultaneous tunnel (ERR_NGROK_334) unless you stop the first or use paid pooling.
 
 ### 4.1. Meta Ray-Ban bridge — screenshot loop (primary; Windows, macOS, Linux)
 
 Drives the already-verified Path A (`POST /snap` with `capture_mode="glasses"`)
-on a timer. Uses **`mss`** everywhere so region coords match `--pick`. End-to-end:
+on a timer. Uses `**mss`** everywhere so region coords match `--pick`. End-to-end:
 
 1. Put on the Ray-Ban Meta v2. Open **Meta AI** on the paired iPhone so the glasses' POV is visible in the app.
 2. Mirror the phone to this machine — e.g. **macOS:** QuickTime → *File → New Movie Recording* → camera dropdown → iPhone; **Windows:** Phone Link (*Features → Phone screen*) or your preferred cast/Mirroring tool. Arrange the mirror so the glasses POV fills the crop region.
@@ -436,19 +436,19 @@ would (`capture_mode="glasses"`).
 Glasses ── Bluetooth ──▶ phone app ── Wi-Fi/LTE ──▶ LiveKit ──▶ worker
 ```
 
-Both apps live under [`mobile/`](./mobile):
+Both apps live under `[mobile/](./mobile)`:
 
-- [`mobile/ios/LiveRecallGlasses/`](./mobile/ios/LiveRecallGlasses) —
-  Swift/SwiftUI, [XcodeGen](https://github.com/yonaskolb/XcodeGen) project
-  manifest at `project.yml`. iOS 15.2+ to match Meta's toolkit floor.
-- [`mobile/android/LiveRecallGlasses/`](./mobile/android/LiveRecallGlasses)
-  — Kotlin/Compose, AGP 8.5, min SDK 29 to match Meta's toolkit floor.
+- `[mobile/ios/LiveRecallGlasses/](./mobile/ios/LiveRecallGlasses)` —
+Swift/SwiftUI, [XcodeGen](https://github.com/yonaskolb/XcodeGen) project
+manifest at `project.yml`. iOS 15.2+ to match Meta's toolkit floor.
+- `[mobile/android/LiveRecallGlasses/](./mobile/android/LiveRecallGlasses)`
+— Kotlin/Compose, AGP 8.5, min SDK 29 to match Meta's toolkit floor.
 
 Both apps default to a **phone-camera fallback** so they build and publish
 end-to-end before the Meta Swift package / Maven dep is wired up — toggle
 `USE_WEARABLES_SDK` to flip on the real toolkit calls. Full setup
 (Wearables credentials, signing, TestFlight / internal track distribution)
-is in [`mobile/README.md`](./mobile/README.md).
+is in `[mobile/README.md](./mobile/README.md)`.
 
 ### 5. Try it
 
@@ -587,16 +587,16 @@ The dashboard sidebar lights each one up the moment it's actually exercised.
 ## Troubleshooting
 
 
-| Symptom                                                       | Probable cause & fix                                                                                                                                                                                                          |
-| ------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Phone shows **failed to fetch** on Connect                          | Backend URL still `localhost` or an **old** tunnel hostname. Use **`make phone-demo`** and open **only** the printed link (includes `?backend=`). Or restart tunnels and paste **both** fresh `trycloudflare` URLs.            |
-| Bridge captures a blank / black image                    | OS denied screen capture — macOS: Screen Recording permission for the Python host app; Windows/Linux: check privacy settings or Wayland portal; retry after granting and restarting the terminal/IDE.                                                      |
-| `/snap` takes 6–10 s and objects come back empty              | Vision got an IDE screenshot / non-clinical frame. Check that the `--region` actually covers the Meta AI mirror window. Run `make bridge-rayban-pick` again to re-select.                                                     |
-| "Address already in use" when starting the backend            | A prior `python -m backend.main` is still bound. `lsof -iTCP:$BACKEND_PORT -sTCP:LISTEN` to find the PID, kill it, relaunch.                                                                                                  |
-| Vector search returns 0 hits                                  | Atlas Vector Search index isn't `READY` yet (can take a minute after `python -m backend.mongo`). The References retriever falls back to `$text` — still works, less adaptive. Re-run § Verify step 1 to confirm index status. |
-| Bridge exits immediately with "cancelled"                     | You hit ESC in the region picker instead of dragging. Re-run `make bridge-rayban-pick`.                                                                                                                                       |
-| Bridge runs but no `scene_context` appears                    | Backend `/snap` isn't actually receiving the POST. Check `--backend` URL matches your `BACKEND_PORT`, and that `curl http://localhost:$BACKEND_PORT/healthz` returns `{"ok": true}`.                                          |
-| Dashboard lanes don't light up                                | Dashboard is a WS consumer of `/stream`. Check `NEXT_PUBLIC_BACKEND_WS` matches your actual backend port.                                                                                                                     |
+| Symptom                                            | Probable cause & fix                                                                                                                                                                                                          |
+| -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Phone shows **failed to fetch** on Connect         | Backend URL still `localhost` or an **old** tunnel hostname. Use `**make phone-demo*`* and open **only** the printed link (includes `?backend=`). Or restart tunnels and paste **both** fresh `trycloudflare` URLs.           |
+| Bridge captures a blank / black image              | OS denied screen capture — macOS: Screen Recording permission for the Python host app; Windows/Linux: check privacy settings or Wayland portal; retry after granting and restarting the terminal/IDE.                         |
+| `/snap` takes 6–10 s and objects come back empty   | Vision got an IDE screenshot / non-clinical frame. Check that the `--region` actually covers the Meta AI mirror window. Run `make bridge-rayban-pick` again to re-select.                                                     |
+| "Address already in use" when starting the backend | A prior `python -m backend.main` is still bound. `lsof -iTCP:$BACKEND_PORT -sTCP:LISTEN` to find the PID, kill it, relaunch.                                                                                                  |
+| Vector search returns 0 hits                       | Atlas Vector Search index isn't `READY` yet (can take a minute after `python -m backend.mongo`). The References retriever falls back to `$text` — still works, less adaptive. Re-run § Verify step 1 to confirm index status. |
+| Bridge exits immediately with "cancelled"          | You hit ESC in the region picker instead of dragging. Re-run `make bridge-rayban-pick`.                                                                                                                                       |
+| Bridge runs but no `scene_context` appears         | Backend `/snap` isn't actually receiving the POST. Check `--backend` URL matches your `BACKEND_PORT`, and that `curl http://localhost:$BACKEND_PORT/healthz` returns `{"ok": true}`.                                          |
+| Dashboard lanes don't light up                     | Dashboard is a WS consumer of `/stream`. Check `NEXT_PUBLIC_BACKEND_WS` matches your actual backend port.                                                                                                                     |
 
 
 ## Cuts list (ordered, if time slips)

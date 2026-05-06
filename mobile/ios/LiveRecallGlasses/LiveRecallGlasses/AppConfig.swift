@@ -18,11 +18,14 @@ final class AppConfig: ObservableObject {
     @AppStorage("identity") var identity: String = "kalle-glasses"
     @AppStorage("room") var room: String = "liverecall-demo"
 
-    // Camera source. Glasses requires the Wearables toolkit + a paired Meta
-    // device; phone uses the on-device camera so the app is still usable as
-    // a stand-in when the toolkit isn't wired up yet (matches the
-    // phone/glasses.html webcam fallback story).
-    @AppStorage("preferGlasses") var preferGlasses: Bool = true
+    // Camera source. Default OFF: Meta DAT device enumeration is unreliable
+    // in our test environment (devicesStream stays empty even after a
+    // successful registration + camera permission grant — Meta's known
+    // issue, not a bug in our integration), so the demo path uses the
+    // phone camera and Snap & ask is wired through LiveKit's local video
+    // track. Flip ON only if you have a paired Ray-Ban that's actively
+    // streaming to Meta AI right now and want to try the DAT path.
+    @AppStorage("preferGlasses") var preferGlasses: Bool = false
 
     var sessionId: String {
         // Same convention as phone/glasses.html: the LiveKit room name is
