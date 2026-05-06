@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ChangeStreamEvent } from "@shared/types";
 
 interface Lane {
@@ -43,9 +43,28 @@ const LANES: Lane[] = [
   },
 ];
 
-export function Pipeline({ events }: { events: ChangeStreamEvent[] }) {
-  // Track the most recent event timestamp per lane to drive a glow.
+// Non-vision lanes reset to idle when a new question arrives.
+const RESETTABLE_LANES = ["router", "retrievers", "reranker", "answerer"];
+
+export function Pipeline({ events, questionId }: { events: ChangeStreamEvent[]; questionId: string | null }) {
   const [activity, setActivity] = useState<Record<string, number>>({});
+  const [laneFloor, setLaneFloor] = useState<Record<string, number>>({});
+
+  // When a new question arrives, record the timestamp so we only show events
+  // that came in AFTER this question was asked.
+  const prevQuestionId = useRef<string | null>(null);
+  useEffect(() => {
+    if (questionId && questionId !== prevQuestionId.current) {
+      prevQuestionId.current = questionId;
+      const floor = Date.now();
+      setLaneFloor((f) => Object.fromEntries(RESETTABLE_LANES.map((id) => [id, floor])));
+      setActivity((a) => {
+        const next = { ...a };
+        RESETTABLE_LANES.forEach((id) => delete next[id]);
+        return next;
+      });
+    }
+  }, [questionId]);
 
   useEffect(() => {
     if (!events.length) return;
@@ -57,7 +76,8 @@ export function Pipeline({ events }: { events: ChangeStreamEvent[] }) {
 
   const lastByLane = (laneId: string) => {
     const lane = LANES.find((l) => l.id === laneId)!;
-    return events.find((e) => lane.collections.includes(e.collection));
+    const floor = laneFloor[laneId] ?? 0;
+    return events.find((e) => lane.collections.includes(e.collection) && e.ts >= floor);
   };
 
   return (

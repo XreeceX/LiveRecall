@@ -89,18 +89,15 @@
       .btn-secondary { background: #1f2937; color: var(--text); }
       .btn-danger { background: rgba(248, 113, 113, 0.2); color: var(--err); }
 
-      /* Small picture-in-picture style preview — shows local camera as soon as tracks exist,
-         without waiting for LiveKit (connect can be slow on cellular). */
+      /* Full-width camera preview — live as soon as Connect is pressed. */
       .pov-pip {
         position: relative;
-        align-self: flex-end;
-        width: min(132px, 32vw);
-        aspect-ratio: 3 / 4;
+        width: 100%;
+        aspect-ratio: 4 / 3;
         border-radius: 14px;
         overflow: hidden;
         background: #07090d;
         border: 1px solid rgba(110, 231, 183, 0.35);
-        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
       }
       .pov-pip video {
         width: 100%;
@@ -110,8 +107,8 @@
       }
       .pov-pip-label {
         position: absolute;
-        top: 6px;
-        left: 6px;
+        top: 8px;
+        left: 8px;
         z-index: 1;
         font-size: 9px;
         letter-spacing: 0.65px;
@@ -124,17 +121,15 @@
         pointer-events: none;
       }
       .pov-pip.pov-pip--idle::after {
-        content: "Camera preview after Connect";
+        content: "Tap Connect to start camera";
         position: absolute;
         inset: 0;
         display: flex;
         align-items: center;
         justify-content: center;
-        text-align: center;
-        padding: 10px;
-        font-size: 11px;
-        line-height: 1.35;
+        font-size: 13px;
         color: var(--muted);
+        background: rgba(7, 9, 13, 0.85);
         pointer-events: none;
       }
       .pov-pip.pov-pip--live::after {
@@ -488,7 +483,7 @@
         try {
           const video = $("preview");
           if (!video.videoWidth) {
-            log("snap: connect first so we can grab a frame", "warn");
+            log("snap: camera not ready yet, please wait", "warn");
             return;
           }
           const canvas = $("snap-canvas");

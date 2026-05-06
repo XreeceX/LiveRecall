@@ -69,7 +69,7 @@ class Hub:
                 "collection": coll,
                 "operation": change.get("operationType", "insert"),
                 "document_id": str((change.get("documentKey") or {}).get("_id", "")),
-                "doc": _scrub(change.get("fullDocument") or {}),
+                "doc": _scrub(change.get("fullDocument") or {}, coll),
                 "ts": now_ms(),
             }
             await self._broadcast(event)
@@ -95,11 +95,13 @@ def _default(obj: Any) -> Any:
         return None
 
 
-def _scrub(doc: dict[str, Any]) -> dict[str, Any]:
-    """Strip giant fields (raw image bytes, embedding vectors) before sending."""
+def _scrub(doc: dict[str, Any], coll: str = "") -> dict[str, Any]:
+    """Strip giant fields before sending. Pass image_b64 through for video_frames only."""
     out: dict[str, Any] = {}
     for k, v in doc.items():
-        if k in ("image_b64", "text_embedding"):
+        if k == "text_embedding":
+            out[k] = f"<{len(v) if hasattr(v, '__len__') else '?'} bytes>"
+        elif k == "image_b64" and coll != "video_frames":
             out[k] = f"<{len(v) if hasattr(v, '__len__') else '?'} bytes>"
         else:
             out[k] = v

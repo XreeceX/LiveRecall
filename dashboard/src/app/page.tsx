@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { CameraFeed } from "../components/CameraFeed";
 import { CaptureModePill } from "../components/CaptureModePill";
 import { LatencyMonitor } from "../components/LatencyMonitor";
 import { MongoFeatures } from "../components/MongoFeatures";
@@ -64,10 +65,11 @@ export default function DashboardPage() {
         </div>
       </header>
 
-      <Pipeline events={events} />
+      <Pipeline events={events} questionId={questionId} />
 
       <div className="grid grid-cols-1 lg:grid-cols-[2fr_1fr] gap-6">
         <div className="space-y-6">
+          <CameraFeed events={events} />
           <ScenePanel events={events} />
 
           <div className="rounded-2xl border border-ink-700 bg-ink-800/70 p-4 space-y-3">
