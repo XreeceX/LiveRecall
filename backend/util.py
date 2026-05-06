@@ -2,13 +2,8 @@
 
 from __future__ import annotations
 
-import re
 import time
 import uuid
-
-# Match Wh-questions anywhere in the utterance so wake-style prefixes
-# ("hey meta, what am I looking at") still route to the question pipeline.
-_WH_ANYWHERE = re.compile(r"\b(what|when|where|why|how|which|who)\b")
 
 
 def now_ms() -> int:
@@ -21,29 +16,8 @@ def new_id(prefix: str = "") -> str:
 
 
 def is_question(text: str) -> bool:
-    """Cheap question detector for the STT pipeline."""
+    """Trigger on utterances starting with 'Recall'."""
     if not text:
         return False
     t = text.strip().lower()
-    if t.endswith("?"):
-        return True
-    starters = (
-        "what",
-        "when",
-        "where",
-        "why",
-        "how",
-        "which",
-        "who",
-        "is ",
-        "are ",
-        "can ",
-        "could ",
-        "should ",
-        "do ",
-        "does ",
-        "did ",
-    )
-    if t.startswith(starters):
-        return True
-    return bool(_WH_ANYWHERE.search(t))
+    return t.startswith("recall")

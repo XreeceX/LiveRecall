@@ -180,15 +180,25 @@ async def token(req: TokenReq) -> TokenResp:
             api_key=settings.livekit_api_key,
             api_secret=settings.livekit_api_secret,
         ) as lk:
+            # Only delete room if it's stale (no participants). Don't delete active rooms.
             try:
-                await lk.room.delete_room(DeleteRoomRequest(room=req.room))
+                room_info = await lk.room.list_rooms()
+                room_exists = any(r.name == req.room for r in room_info)
+                if room_exists:
+                    # Room exists; don't delete it (breaks reconnects). Just dispatch.
+                    await lk.agent_dispatch.create_dispatch(
+                        CreateAgentDispatchRequest(agent_name="liverecall", room=req.room)
+                    )
             except Exception:  # noqa: BLE001
-                pass  # room didn't exist, that's fine
-            await lk.agent_dispatch.create_dispatch(
-                CreateAgentDispatchRequest(agent_name="liverecall", room=req.room)
-            )
+                # If we can't list rooms, just try to dispatch anyway.
+                try:
+                    await lk.agent_dispatch.create_dispatch(
+                        CreateAgentDispatchRequest(agent_name="liverecall", room=req.room)
+                    )
+                except Exception as dispatch_err:  # noqa: BLE001
+                    log.warning("agent dispatch failed: %s", dispatch_err)
     except Exception as e:  # noqa: BLE001
-        log.warning("agent dispatch failed (non-fatal): %s", e)
+        log.warning("LiveKit API call failed (non-fatal): %s", e)
 
     return TokenResp(
         token=at.to_jwt(),

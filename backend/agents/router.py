@@ -90,12 +90,20 @@ def _llm() -> ChatOpenAI:
     )
 
 
-async def recent_scene_context(session_id: str, *, seconds: int = 30) -> list[dict[str, Any]]:
+async def recent_scene_context(session_id: str, *, seconds: int = 10) -> list[dict[str, Any]]:
     cutoff = now_ms() - seconds * 1000
     cur = collection("scene_context").find(
         {"session_id": session_id, "timestamp": {"$gte": cutoff}}
-    ).sort("timestamp", -1).limit(5)
-    return [d async for d in cur]
+    ).sort("timestamp", -1).limit(2)
+    results = [d async for d in cur]
+    if not results:
+        # Widen to 60s if nothing in the last 10s (e.g. question asked after pause)
+        cutoff2 = now_ms() - 60_000
+        cur2 = collection("scene_context").find(
+            {"session_id": session_id, "timestamp": {"$gte": cutoff2}}
+        ).sort("timestamp", -1).limit(1)
+        results = [d async for d in cur2]
+    return results
 
 
 def _scene_blob(scenes: list[dict[str, Any]]) -> str:
@@ -109,29 +117,92 @@ def _scene_blob(scenes: list[dict[str, Any]]) -> str:
     return "\n".join(parts) or "(no recent scene context)"
 
 
+def _patch_queries_from_scene(queries: list[dict[str, Any]], scenes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Inject scene context into retriever filters: apparatus names → references, patient IDs → events."""
+    if not scenes:
+        return queries
+
+    scene = scenes[0]  # Most recent
+    apparatus: list[str] = scene.get("apparatus") or []
+    visible_text: list[str] = scene.get("text_visible") or []
+
+    # Extract patient ID from visible text (e.g., "P-204")
+    patient_id: str | None = None
+    for text in visible_text:
+        if text and text.startswith("P-"):
+            parts = text.split()
+            for part in parts:
+                if part.startswith("P-") and len(part) > 2 and part[2:].isdigit():
+                    patient_id = part
+                    break
+
+    patched = []
+    for q in queries:
+        pq = dict(q)
+        source = q.get("source", "")
+
+        if source == "references" and apparatus:
+            # Set filter.name to the first apparatus (most relevant)
+            if "filter" not in pq:
+                pq["filter"] = {}
+            # Determine category based on apparatus name
+            app_name = apparatus[0].lower()
+            pq["filter"]["name"] = app_name
+            # Heuristic: if it looks like a medication, mark as such
+            if any(med in app_name for med in ["metformin", "lisinopril", "amoxicillin", "insulin", "aspirin"]):
+                pq["filter"]["category"] = "medication"
+            elif any(dev in app_name for dev in ["pump", "monitor", "ventilator", "defibrillator", "cart"]):
+                pq["filter"]["category"] = "equipment"
+
+        elif source == "events" and patient_id:
+            # Set filter.patient_id for time-series queries
+            if "filter" not in pq:
+                pq["filter"] = {}
+            pq["filter"]["patient_id"] = patient_id
+
+        patched.append(pq)
+
+    return patched
+
+
 async def plan(question: dict[str, Any]) -> dict[str, Any]:
     """Build and persist a retrieval_plan from a question doc."""
     qid = question["_id"]
     session_id = question["session_id"]
-    scenes = await recent_scene_context(session_id, seconds=30)
+    log.info("router.plan() starting: qid=%s session=%s", qid, session_id)
+
+    scenes = await recent_scene_context(session_id)
+    log.info("router: fetched scenes=%d for qid=%s", len(scenes), qid)
+    if scenes:
+        log.info("router: scene apparatus=%s visible=%s", scenes[0].get("apparatus"), scenes[0].get("text_visible"))
+
     cb = MongoTraceCallback(agent="router", question_id=qid, session_id=session_id)
 
     prompt = (
         f"Question: {question['text']}\n\n"
         f"Recent scene context (newest first):\n{_scene_blob(scenes)}"
     )
+    log.info("router: calling llm for qid=%s", qid)
     resp = await _llm().ainvoke(
         [SystemMessage(content=SYSTEM), HumanMessage(content=prompt)],
         config={"callbacks": [cb]},
     )
     raw = (resp.content or "").strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+    log.info("router: llm response raw (first 300 chars): %s", raw[:300])
+
     try:
         parsed = json.loads(raw)
-    except json.JSONDecodeError:
-        log.warning("router json parse failed, falling back. raw=%s", raw[:200])
+        log.info("router: parsed json successfully for qid=%s", qid)
+    except json.JSONDecodeError as e:
+        log.warning("router json parse failed for qid=%s, error=%s, falling back. raw=%s", qid, e, raw[:200])
         parsed = {"queries": _fallback_queries(question["text"])}
 
     queries = parsed.get("queries") or _fallback_queries(question["text"])
+    log.info("router: got %d queries before patching for qid=%s", len(queries), qid)
+
+    queries = _patch_queries_from_scene(queries[:3], scenes)
+    log.info("router: patched queries for qid=%s, now have %d queries", qid, len(queries))
+
     plan_doc = {
         "_id": new_id("rp"),
         "question_id": qid,
@@ -141,7 +212,9 @@ async def plan(question: dict[str, Any]) -> dict[str, Any]:
         "queries": queries[:3],
         "created_at": now_ms(),
     }
+    log.info("router: inserting retrieval_plan doc id=%s for qid=%s", plan_doc["_id"], qid)
     await collection("retrieval_plans").insert_one(plan_doc)
+    log.info("router: retrieval_plan inserted successfully id=%s for qid=%s", plan_doc["_id"], qid)
     return plan_doc
 
 
@@ -157,10 +230,16 @@ async def run_router_loop() -> None:
     """Subscribe to new questions and produce retrieval_plans."""
     log.info("router loop watching questions change stream")
     async for change in watch("questions"):
-        if change.get("operationType") != "insert":
+        op_type = change.get("operationType")
+        log.info("router: got change event, operationType=%s", op_type)
+        if op_type != "insert":
+            log.info("router: skipping non-insert operation %s", op_type)
             continue
         q = change.get("fullDocument") or {}
+        qid = q.get("_id", "?")
+        log.info("router: processing question insert qid=%s text='%s'", qid, q.get("text", "")[:50])
         try:
             await plan(q)
+            log.info("router: plan completed successfully for qid=%s", qid)
         except Exception as e:  # noqa: BLE001
-            log.exception("router failed: %s", e)
+            log.exception("router failed for qid=%s: %s", qid, e)

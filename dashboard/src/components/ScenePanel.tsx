@@ -64,10 +64,8 @@ export function ScenePanel({ events }: { events: ChangeStreamEvent[] }) {
               </div>
             </div>
             <div>
-              <div className="text-slate-500 text-[11px] uppercase">env / activity</div>
-              <div>
-                {latestScene.environment} · {latestScene.activity}
-              </div>
+              <div className="text-slate-500 text-[11px] uppercase">activity</div>
+              <div>{latestScene.activity || "—"}</div>
             </div>
             <div className="text-slate-300 text-[13px] italic pt-1">
               “{latestScene.text_summary}”
