@@ -97,8 +97,8 @@ async def recent_scene_context(session_id: str, *, seconds: int = 10) -> list[di
     ).sort("timestamp", -1).limit(2)
     results = [d async for d in cur]
     if not results:
-        # Widen to 60s if nothing in the last 10s (e.g. question asked after pause)
-        cutoff2 = now_ms() - 60_000
+        # Widen to 15s only — avoid reaching back to a previous object shown earlier
+        cutoff2 = now_ms() - 15_000
         cur2 = collection("scene_context").find(
             {"session_id": session_id, "timestamp": {"$gte": cutoff2}}
         ).sort("timestamp", -1).limit(1)
@@ -141,17 +141,14 @@ def _patch_queries_from_scene(queries: list[dict[str, Any]], scenes: list[dict[s
         pq = dict(q)
         source = q.get("source", "")
 
-        if source == "references" and apparatus:
-            # Set filter.name to the first apparatus (most relevant)
+        if source == "references":
             if "filter" not in pq:
                 pq["filter"] = {}
-            # Determine category based on apparatus name
-            app_name = apparatus[0].lower()
+            app_name = apparatus[0].lower() if apparatus else "stethoscope"
             pq["filter"]["name"] = app_name
-            # Heuristic: if it looks like a medication, mark as such
             if any(med in app_name for med in ["metformin", "lisinopril", "amoxicillin", "insulin", "aspirin"]):
                 pq["filter"]["category"] = "medication"
-            elif any(dev in app_name for dev in ["pump", "monitor", "ventilator", "defibrillator", "cart"]):
+            elif any(dev in app_name for dev in ["pump", "monitor", "ventilator", "defibrillator", "cart", "stethoscope"]):
                 pq["filter"]["category"] = "equipment"
 
         elif source == "events" and patient_id:
@@ -171,7 +168,15 @@ async def plan(question: dict[str, Any]) -> dict[str, Any]:
     session_id = question["session_id"]
     log.info("router.plan() starting: qid=%s session=%s", qid, session_id)
 
-    scenes = await recent_scene_context(session_id)
+    # Snap questions carry the exact scene_context_id — use it directly so
+    # switching from object A → object B doesn't bleed A's context into B's query.
+    pinned_sc_id = question.get("scene_context_id")
+    if pinned_sc_id:
+        sc = await collection("scene_context").find_one({"_id": pinned_sc_id})
+        scenes = [sc] if sc else []
+        log.info("router: using pinned scene_context_id=%s for qid=%s", pinned_sc_id, qid)
+    else:
+        scenes = await recent_scene_context(session_id)
     log.info("router: fetched scenes=%d for qid=%s", len(scenes), qid)
     if scenes:
         log.info("router: scene apparatus=%s visible=%s", scenes[0].get("apparatus"), scenes[0].get("text_visible"))
@@ -220,7 +225,7 @@ async def plan(question: dict[str, Any]) -> dict[str, Any]:
 
 def _fallback_queries(question_text: str) -> list[dict[str, Any]]:
     return [
-        {"source": "references", "filter": {}, "vector_query": question_text, "weight": 1.0},
+        {"source": "references", "filter": {"name": "stethoscope", "category": "equipment"}, "vector_query": question_text, "weight": 1.0},
         {"source": "events", "filter": {}, "vector_query": "", "weight": 1.0},
         {"source": "notes", "filter": {}, "vector_query": question_text, "weight": 0.7},
     ]

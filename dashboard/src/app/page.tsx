@@ -69,7 +69,6 @@ export default function DashboardPage() {
 
       <div className="grid grid-cols-1 lg:grid-cols-[2fr_1fr] gap-6">
         <div className="space-y-6">
-          <CameraFeed events={events} />
           <ScenePanel events={events} />
 
           <div className="rounded-2xl border border-ink-700 bg-ink-800/70 p-4 space-y-3">
@@ -99,7 +98,10 @@ export default function DashboardPage() {
           <ReasoningTrace questionId={questionId} />
         </div>
 
-        <MongoFeatures events={events} />
+        <div className="space-y-6">
+          <CameraFeed events={events} />
+          <MongoFeatures events={events} />
+        </div>
       </div>
 
       <footer className="text-[11px] text-slate-500 text-center pt-6">

@@ -290,6 +290,7 @@ async def snap(req: SnapReq) -> SnapResp:
             "transcript_id": "",
             "text": req.question.strip(),
             "asked_at": now_ms(),
+            "scene_context_id": sc_id,
         })
 
     log.info(
